@@ -1,73 +1,167 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>AI vs AI Chat</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI × AI Chat Arena</title>
 
 <style>
-body {
-  margin: 0;
-  padding: 0;
-  background: #0f172a;
-  font-family: Arial, sans-serif;
-  color: white;
-  text-align: center;
-}
+    body {
+        margin: 0;
+        background: linear-gradient(135deg, #0f0f3d, #1a1a60, #3d0f66);
+        font-family: Arial, sans-serif;
+        color: #fff;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+    }
 
-h1 {
-  margin-top: 20px;
-}
+    header {
+        padding: 15px;
+        text-align: center;
+        font-size: 24px;
+        font-weight: bold;
+        background: rgba(0,0,0,0.2);
+        backdrop-filter: blur(10px);
+    }
 
-#chatBox {
-  width: 90%;
-  height: 75vh;
-  margin: 20px auto;
-  padding: 15px;
-  background: rgba(255,255,255,0.1);
-  border: 1px solid rgba(255,255,255,0.3);
-  overflow-y: auto;
-  border-radius: 15px;
-}
+    #chatBox {
+        flex: 1;
+        padding: 20px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
 
-.msg {
-  padding: 12px;
-  margin: 10px 0;
-  border-radius: 12px;
-  max-width: 70%;
-  font-size: 17px;
-  animation: fadeIn 0.4s ease;
-}
+    .msg {
+        max-width: 75%;
+        padding: 12px 16px;
+        border-radius: 10px;
+        line-height: 1.5;
+        font-size: 16px;
+        animation: fadeIn 0.3s ease;
+    }
 
-.ai1 { background: #3b82f6; text-align: left; }
-.ai2 { background: #f97316; text-align: right; margin-left: auto; }
+    .gemini {
+        background: rgba(0, 255, 180, 0.2);
+        border-left: 4px solid #00ffb4;
+        align-self: flex-start;
+    }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(12px); }
-  to { opacity: 1; transform: translateY(0); }
-}
+    .gpt {
+        background: rgba(255, 120, 0, 0.25);
+        border-right: 4px solid #ff9100;
+        align-self: flex-end;
+    }
 
-#startBtn {
-  padding: 12px 25px;
-  background: #22c55e;
-  border: none;
-  font-size: 18px;
-  border-radius: 10px;
-  cursor: pointer;
-  margin-bottom: 20px;
-  font-weight: bold;
-}
+    #startBtn {
+        padding: 15px;
+        width: 100%;
+        border: none;
+        background: #00e1ff;
+        color: #000;
+        font-size: 20px;
+        cursor: pointer;
+        font-weight: bold;
+        transition: 0.2s;
+    }
+
+    #startBtn:hover {
+        background: #00c8e0;
+    }
+
+    @keyframes fadeIn {
+        from {opacity: 0; transform: translateY(5px);}
+        to {opacity: 1; transform: translateY(0);}
+    }
 </style>
 </head>
 
 <body>
-
-<h1>🤖 AI vs AI — Live Chat</h1>
+<header>🤖 AI vs AI — Live Chat</header>
 
 <div id="chatBox"></div>
 
-<button id="startBtn">Start Conversation</button>
+<button id="startBtn">Start AI Conversation</button>
 
-<script src="chat.js"></script>
+<script>
+// YOUR GEMINI KEY
+const GEMINI_KEY = "AIzaSyCpxDoltExFg4KfN8QsJoTXuZaOJx6Ylw8";
+
+// PREXZY GPT-5 URL
+const PREXZY_URL = "https://apis.prexzyvilla.site/ai/gpt-5?text=";
+
+let running = false;
+let lastGemini = "Hello GPT!";
+let lastGPT = "";
+
+const chatBox = document.getElementById("chatBox");
+const btn = document.getElementById("startBtn");
+
+// Auto-scroll
+function scrollDown() {
+    chatBox.scrollTo({ top: chatBox.scrollHeight, behavior: "smooth" });
+}
+
+// Render message
+function addMessage(text, type) {
+    const div = document.createElement("div");
+    div.className = `msg ${type}`;
+    div.innerText = text;
+    chatBox.appendChild(div);
+    scrollDown();
+}
+
+// Call Gemini
+async function askGemini(text) {
+    const res = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text }] }]
+            })
+        }
+    );
+
+    const data = await res.json();
+    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini Error";
+}
+
+// Call GPT-5
+async function askGPT(text) {
+    const res = await fetch(PREXZY_URL + encodeURIComponent(text));
+    const data = await res.json();
+    return data.text || "GPT Error";
+}
+
+// Conversation Loop
+async function startChat() {
+    if (running) return;
+    running = true;
+    btn.innerText = "Running...";
+
+    while (running) {
+        // GEMINI → GPT
+        const g = await askGemini(lastGPT || lastGemini);
+        addMessage("Gemini: " + g, "gemini");
+        lastGemini = g;
+
+        await new Promise(r => setTimeout(r, 1000));
+
+        // GPT → GEMINI
+        const p = await askGPT(lastGemini);
+        addMessage("GPT-5: " + p, "gpt");
+        lastGPT = p;
+
+        await new Promise(r => setTimeout(r, 1000));
+    }
+}
+
+btn.addEventListener("click", startChat);
+</script>
+
 </body>
 </html>
