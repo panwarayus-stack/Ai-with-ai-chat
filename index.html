@@ -1,165 +1,143 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>🤖 AI vs AI Live Chat</title>
-  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;700&display=swap" rel="stylesheet">
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body {
-      font-family: 'Roboto', sans-serif;
-      background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
-      color: #fff;
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-    }
+<meta charset="UTF-8">
+<title>AI vs AI • Live Conversation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 
-    header {
-      text-align: center;
-      padding: 20px;
-      background: rgba(0,0,0,0.3);
-      backdrop-filter: blur(5px);
-      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
-    }
+<style>
+/* BACKGROUND */
+body {
+  margin: 0;
+  padding: 0;
+  background: radial-gradient(circle at top, #1a2a3a, #0a0f18 70%);
+  font-family: "Poppins", sans-serif;
+  color: white;
+  overflow: hidden;
+}
 
-    header h1 {
-      font-size: 2rem;
-      color: #f0f0f0;
-      text-shadow: 1px 1px 5px rgba(0,0,0,0.5);
-    }
+/* FLOATING PARTICLES */
+@keyframes float {
+  0% { transform: translateY(0px); opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { transform: translateY(-50px); opacity: 0.4; }
+}
+.dot {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  background: #4ccbff;
+  border-radius: 50%;
+  animation: float 4s infinite ease-in-out;
+  opacity: 0.5;
+}
+.dot:nth-child(2) { left: 20%; animation-duration: 5s; }
+.dot:nth-child(3) { left: 60%; animation-duration: 6s; }
+.dot:nth-child(4) { left: 80%; animation-duration: 7s; }
 
-    #chat-container {
-      flex: 1;
-      display: flex;
-      justify-content: center;
-      padding: 20px;
-      overflow-y: auto;
-    }
+/* MAIN CONTAINER */
+.container {
+  width: 95%;
+  max-width: 900px;
+  margin: 20px auto;
+  text-align: center;
+}
 
-    #chat {
-      width: 100%;
-      max-width: 700px;
-      display: flex;
-      flex-direction: column;
-      gap: 15px;
-    }
+/* HEADER */
+h1 {
+  font-size: 34px;
+  filter: drop-shadow(0 0 10px #00eaff);
+  letter-spacing: 1px;
+  margin-bottom: 15px;
+}
 
-    .msg {
-      padding: 15px 20px;
-      border-radius: 20px;
-      max-width: 80%;
-      line-height: 1.5;
-      animation: fadeIn 0.5s ease-in-out;
-      word-wrap: break-word;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-      color: #fff;
-      font-weight: 500;
-      position: relative;
-    }
+/* CHAT BOX */
+#chatBox {
+  width: 100%;
+  height: 75vh;
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: 18px;
 
-    /* GPT-5 Bubble */
-    .gpt {
-      align-self: flex-start;
-      border-top-left-radius: 0;
-      background: linear-gradient(120deg, #1e3c72, #2a5298);
-      box-shadow: 0 0 15px rgba(46, 134, 193, 0.6);
-    }
+  background: rgba(255,255,255,0.05);
+  border: 1px solid rgba(255,255,255,0.2);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 0 20px rgba(0,0,0,0.4);
 
-    /* Gemini Bubble */
-    .gemini {
-      align-self: flex-end;
-      border-top-right-radius: 0;
-      background: linear-gradient(120deg, #6a3093, #a044ff);
-      box-shadow: 0 0 15px rgba(170, 68, 255, 0.6);
-    }
+  scroll-behavior: smooth;
+}
 
-    footer {
-      text-align: center;
-      padding: 10px;
-      background-color: rgba(0,0,0,0.2);
-      font-size: 0.9rem;
-      color: #ddd;
-    }
+/* CHAT MESSAGE */
+.msg {
+  max-width: 75%;
+  padding: 14px 18px;
+  margin: 12px 0;
+  border-radius: 12px;
+  font-size: 17px;
+  line-height: 1.45;
+  animation: fadeIn 0.5s ease forwards;
+  opacity: 0;
+}
 
-    @keyframes fadeIn {
-      from { opacity: 0; transform: translateY(10px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
 
-    /* Scrollbar */
-    #chat-container::-webkit-scrollbar { width: 8px; }
-    #chat-container::-webkit-scrollbar-track { background: rgba(255,255,255,0.1); }
-    #chat-container::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
-  </style>
+/* AI 1 */
+.ai1 {
+  background: linear-gradient(135deg, #0078ff, #00c3ff);
+  box-shadow: 0 0 12px rgba(0,200,255,0.6);
+  text-align: left;
+}
+
+/* AI 2 */
+.ai2 {
+  background: linear-gradient(135deg, #ff5b2d, #ff884d);
+  box-shadow: 0 0 12px rgba(255,120,80,0.6);
+  margin-left: auto;
+  text-align: right;
+}
+
+/* START BUTTON */
+#startBtn {
+  background: linear-gradient(135deg, #00ff9d, #00c86f);
+  padding: 15px 30px;
+  font-size: 20px;
+  border: none;
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 700;
+  margin-top: 20px;
+  color: #000;
+  transition: 0.2s;
+  box-shadow: 0 0 12px rgba(0,255,150,0.7);
+}
+
+#startBtn:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 20px rgba(0,255,150,1);
+}
+
+</style>
 </head>
+
 <body>
 
-  <header>
-    <h1>🤖 AI vs AI — Live Chat</h1>
-  </header>
+<div class="dot"></div>
+<div class="dot"></div>
+<div class="dot"></div>
+<div class="dot"></div>
 
-  <div id="chat-container">
-    <div id="chat"></div>
-  </div>
+<div class="container">
+  <h1>🤖 AI vs AI — Live Chat</h1>
 
-  <footer>
-    Watching AI conversations live — read only
-  </footer>
+  <div id="chatBox"></div>
 
-  <script>
-    let history = [];
-    let autoScroll = true;
+  <button id="startBtn">Start Conversation</button>
+</div>
 
-    const chatDiv = document.getElementById("chat-container");
-
-    // Detect if user scrolls up, stop auto-scroll
-    chatDiv.addEventListener('scroll', () => {
-      const nearBottom = chatDiv.scrollHeight - chatDiv.scrollTop - chatDiv.clientHeight < 50;
-      autoScroll = nearBottom;
-    });
-
-    async function fetchMessages() {
-      try {
-        const resp = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ history })
-        });
-
-        const data = await resp.json();
-
-        const chatBox = document.getElementById("chat");
-
-        // GPT-5 message
-        const gptDiv = document.createElement("div");
-        gptDiv.className = "msg gpt";
-        gptDiv.textContent = "GPT-5: " + data.from_gpt5;
-        chatBox.appendChild(gptDiv);
-
-        // Gemini message
-        const geminiDiv = document.createElement("div");
-        geminiDiv.className = "msg gemini";
-        geminiDiv.textContent = "Gemini: " + data.from_gemini;
-        chatBox.appendChild(geminiDiv);
-
-        // Update history
-        history.push(data.from_gpt5, data.from_gemini);
-
-        // Auto-scroll
-        if (autoScroll) {
-          chatDiv.scrollTo({ top: chatDiv.scrollHeight, behavior: 'smooth' });
-        }
-
-      } catch (err) {
-        console.error("Error fetching messages:", err);
-      }
-    }
-
-    setInterval(fetchMessages, 5000);
-    fetchMessages();
-  </script>
+<script src="chat.js"></script>
 
 </body>
 </html>
