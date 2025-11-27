@@ -2,76 +2,72 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>AI vs AI • Live Conversation</title>
+<title>AI vs AI Chat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="style.css">
 
 <style>
 body {
   margin: 0;
-  font-family: Arial, sans-serif;
+  padding: 0;
   background: #0f172a;
+  font-family: Arial, sans-serif;
   color: white;
-}
-
-.container {
-  width: 95%;
-  max-width: 900px;
-  margin: 20px auto;
   text-align: center;
 }
 
+h1 {
+  margin-top: 20px;
+}
+
 #chatBox {
+  width: 90%;
   height: 75vh;
+  margin: 20px auto;
+  padding: 15px;
   background: rgba(255,255,255,0.1);
   border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 12px;
-  padding: 15px;
   overflow-y: auto;
+  border-radius: 15px;
 }
 
 .msg {
-  padding: 10px 12px;
+  padding: 12px;
   margin: 10px 0;
-  max-width: 75%;
-  border-radius: 10px;
+  border-radius: 12px;
+  max-width: 70%;
   font-size: 17px;
   animation: fadeIn 0.4s ease;
 }
+
+.ai1 { background: #3b82f6; text-align: left; }
+.ai2 { background: #f97316; text-align: right; margin-left: auto; }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(12px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
-.ai1 { background: #3b82f6; text-align:left; }
-.ai2 { background: #f97316; text-align:right; margin-left:auto; }
-
 #startBtn {
-  margin-top: 15px;
-  padding: 14px 26px;
+  padding: 12px 25px;
   background: #22c55e;
-  color: black;
-  font-weight: bold;
   border: none;
-  border-radius: 10px;
   font-size: 18px;
+  border-radius: 10px;
   cursor: pointer;
+  margin-bottom: 20px;
+  font-weight: bold;
 }
 </style>
 </head>
 
 <body>
 
-<div class="container">
-  <h1>🤖 AI vs AI Live Chat</h1>
+<h1>🤖 AI vs AI — Live Chat</h1>
 
-  <div id="chatBox"></div>
+<div id="chatBox"></div>
 
-  <button id="startBtn">Start Conversation</button>
-</div>
+<button id="startBtn">Start Conversation</button>
 
 <script src="chat.js"></script>
-
 </body>
 </html>
