@@ -116,18 +116,20 @@ function addMessage(text, type) {
 // Call Gemini
 async function askGemini(text) {
     const res = await fetch(
-        "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + GEMINI_KEY,
+        "https://generativelanguage.googleapis.com/v1beta2/models/gemini-pro:generateText?key=" + GEMINI_KEY,
         {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
-                contents: [{ parts: [{ text }] }]
+                prompt: {
+                    text: text
+                }
             })
         }
     );
 
     const data = await res.json();
-    return data.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini Error";
+    return data.candidates?.[0]?.output || "Gemini Error";
 }
 
 // Call GPT-5
