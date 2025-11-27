@@ -3,7 +3,6 @@ const GEMINI_KEY = "AIzaSyCpxDoltExFg4KfN8QsJoTXuZaOJx6Ylw8";
 const chatBox = document.getElementById("chatBox");
 const startBtn = document.getElementById("startBtn");
 
-// Auto-scroll
 function addMsg(text, who) {
     const div = document.createElement("div");
     div.className = "msg " + who;
@@ -13,34 +12,34 @@ function addMsg(text, who) {
 }
 
 // PREXZY GPT-5 API
-async function prexzyAI(txt) {
+async function prexzyAI(msg) {
     try {
-        const r = await fetch("https://apis.prexzyvilla.site/ai/gpt-5?text=" + encodeURIComponent(txt));
-        const j = await r.json();
-        return j.text || "Prexzy Error";
+        let r = await fetch("https://apis.prexzyvilla.site/ai/gpt-5?text=" + encodeURIComponent(msg));
+        let j = await r.json();
+        return j.text || "Prexzy error";
     } catch {
-        return "Prexzy API Failed.";
+        return "Prexzy API failed";
     }
 }
 
-// GEMINI API
-async function geminiAI(txt) {
+// GEMINI AI API
+async function geminiAI(msg) {
     try {
-        const r = await fetch(
+        let r = await fetch(
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + GEMINI_KEY,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: txt }] }]
+                    contents: [{ parts: [{ text: msg }] }]
                 })
             }
         );
 
-        const j = await r.json();
-        return j?.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini Error";
+        let j = await r.json();
+        return j?.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini error";
     } catch {
-        return "Gemini API Failed.";
+        return "Gemini API failed";
     }
 }
 
@@ -50,18 +49,18 @@ startBtn.onclick = async () => {
     if (running) return;
     running = true;
 
-    let msg = "Hello Gemini, tell me something interesting!";
-    addMsg(msg, "ai1");
+    let msg = "Hello Gemini, say something!";
+    addMsg("GPT-5: " + msg, "ai1");
 
     while (running) {
-        let reply1 = await prexzyAI(msg);
-        addMsg(reply1, "ai1");
+        let gpt = await prexzyAI(msg);
+        addMsg("GPT-5: " + gpt, "ai1");
 
-        let reply2 = await geminiAI(reply1);
-        addMsg(reply2, "ai2");
+        let gem = await geminiAI(gpt);
+        addMsg("Gemini: " + gem, "ai2");
 
-        msg = reply2;
+        msg = gem;
 
-        await new Promise(r => setTimeout(r, 1500));
+        await new Promise(res => setTimeout(res, 2000));
     }
 };
