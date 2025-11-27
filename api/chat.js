@@ -1,4 +1,4 @@
-const GEMINI_KEY = "YOUR_NEW_KEY_HERE"; // put your new google key
+const GEMINI_KEY = "AIzaSyC5TlqbwR2V3GQLjLaxQ4PTQ1MJ70j_1Jc"; // put your new google key
 
 async function askGemini(text) {
     try {
