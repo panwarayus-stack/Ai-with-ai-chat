@@ -1,39 +1,60 @@
-export default async function handler(req, res) {
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Method not allowed" });
-  }
+const GEMINI_KEY = "AIzaSyCpxDoltExFg4KfN8QsJoTXuZaOJx6Ylw8";
 
-  const history = req.body.history || [];
-  const lastMessage = history.length > 0 ? history[history.length - 1] : "Hello";
+const chatBox = document.getElementById("chatBox");
+const startBtn = document.getElementById("startBtn");
 
-  try {
-    // ----- 1) PREXZY GPT-5 API -----
-    const prexzyResp = await fetch(`https://apis.prexzyvilla.site/ai/gpt-5?text=${encodeURIComponent(lastMessage)}`);
-    const prexzyData = await prexzyResp.json();
-    const gpt5Reply = prexzyData.text;
+// Scroll always to bottom
+function addMsg(text, who) {
+    let div = document.createElement("div");
+    div.className = "msg " + who;
+    div.innerText = text;
+    chatBox.appendChild(div);
 
-    // ----- 2) GOOGLE GEMINI API -----
-    const geminiResp = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5:generateText?key=AIzaSyCpxDoltExFg4KfN8QsJoTXuZaOJx6Ylw8`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          prompt: gpt5Reply,
-          maxOutputTokens: 200
-        })
-      }
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
+
+async function prexzyAI(input) {
+    const r = await fetch("https://apis.prexzyvilla.site/ai/gpt-5?text=" + encodeURIComponent(input));
+    const j = await r.json();
+    return j.text;
+}
+
+async function geminiAI(input) {
+    const r = await fetch(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + GEMINI_KEY,
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                contents: [{ parts: [{ text: input }] }]
+            })
+        }
     );
 
-    const geminiData = await geminiResp.json();
-    const geminiReply = geminiData.candidates?.[0]?.content?.[0]?.text || "Gemini did not respond.";
-
-    res.status(200).json({
-      from_gpt5: gpt5Reply,
-      from_gemini: geminiReply
-    });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: "Something went wrong" });
-  }
+    const j = await r.json();
+    return j?.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini Error.";
 }
+
+let running = false;
+
+startBtn.onclick = async () => {
+    if (running) return;
+    running = true;
+
+    let msg = "Hello Gemini, introduce yourself!";
+    addMsg(msg, "ai1");
+
+    while (running) {
+        // PREXZY reply
+        let p = await prexzyAI(msg);
+        addMsg(p, "ai1");
+
+        // GEMINI reply
+        let g = await geminiAI(p);
+        addMsg(g, "ai2");
+
+        msg = g;
+
+        await new Promise(r => setTimeout(r, 1500));
+    }
+};
