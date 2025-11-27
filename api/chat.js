@@ -1,66 +1,62 @@
-const GEMINI_KEY = "AIzaSyCpxDoltExFg4KfN8QsJoTXuZaOJx6Ylw8";
+const GEMINI_KEY = "YOUR_NEW_KEY_HERE"; // put your new google key
 
-const chatBox = document.getElementById("chatBox");
-const startBtn = document.getElementById("startBtn");
-
-function addMsg(text, who) {
-    const div = document.createElement("div");
-    div.className = "msg " + who;
-    div.innerText = text;
-    chatBox.appendChild(div);
-    chatBox.scrollTop = chatBox.scrollHeight;
-}
-
-// PREXZY GPT-5 API
-async function prexzyAI(msg) {
+async function askGemini(text) {
     try {
-        let r = await fetch("https://apis.prexzyvilla.site/ai/gpt-5?text=" + encodeURIComponent(msg));
-        let j = await r.json();
-        return j.text || "Prexzy error";
-    } catch {
-        return "Prexzy API failed";
-    }
-}
-
-// GEMINI AI API
-async function geminiAI(msg) {
-    try {
-        let r = await fetch(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=" + GEMINI_KEY,
+        const res = await fetch(
+            "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=" + GEMINI_KEY,
             {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({
-                    contents: [{ parts: [{ text: msg }] }]
+                    contents: [
+                        {
+                            role: "user",
+                            parts: [{ text }]
+                        }
+                    ]
                 })
             }
         );
 
-        let j = await r.json();
-        return j?.candidates?.[0]?.content?.parts?.[0]?.text || "Gemini error";
-    } catch {
-        return "Gemini API failed";
+        const data = await res.json();
+
+        if (data.error) return "Gemini Error: " + data.error.message;
+        return data.candidates?.[0]?.content?.parts?.[0]?.text || "No response";
+
+    } catch (err) {
+        return "Request Failed";
     }
 }
 
-let running = false;
+const chatBox = document.getElementById("chatBox");
+const startBtn = document.getElementById("startBtn");
 
-startBtn.onclick = async () => {
-    if (running) return;
-    running = true;
+function addMsg(text, cls) {
+    const div = document.createElement("div");
+    div.className = "msg " + cls;
+    div.textContent = text;
+    chatBox.appendChild(div);
+    chatBox.scrollTop = chatBox.scrollHeight;
+}
 
-    let msg = "Hello Gemini, say something!";
-    addMsg("GPT-5: " + msg, "ai1");
+let lastMessage = "Hello, how are you?";
 
-    while (running) {
-        let gpt = await prexzyAI(msg);
-        addMsg("GPT-5: " + gpt, "ai1");
+async function loopAI() {
+    // AI 1
+    addMsg("AI 1: " + lastMessage, "ai1");
+    const reply1 = await askGemini(lastMessage);
 
-        let gem = await geminiAI(gpt);
-        addMsg("Gemini: " + gem, "ai2");
+    // AI 2
+    addMsg("AI 2: " + reply1, "ai2");
+    const reply2 = await askGemini(reply1);
 
-        msg = gem;
+    lastMessage = reply2;
 
-        await new Promise(res => setTimeout(res, 2000));
-    }
+    setTimeout(loopAI, 1200); // speed (1.2 sec)
+}
+
+startBtn.onclick = () => {
+    startBtn.disabled = true;
+    startBtn.innerText = "Chat Running...";
+    loopAI();
 };
