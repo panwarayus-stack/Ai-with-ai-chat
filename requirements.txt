@@ -1,0 +1,21 @@
+# Core dependencies for the Voroa Instagram bot.
+# Voroa installs this file automatically before the start command runs.
+# Python 3.10+ required (instagrapi 3.x floor). Verified on Python 3.11.
+
+# HTTP client used for all public APIs (OpenRouter, Open-Meteo, AniList, ...)
+requests>=2.34,<3
+
+# Loads .env files in local development; on Voroa use the dashboard env vars.
+python-dotenv>=1.2,<2
+
+# Instagram Private API wrapper (Python). Used for DMs, account info, sessions.
+# NOTE: unofficial API — see README "Instagram integration" for limitations.
+instagrapi>=3.0,<4
+
+# Public username search (github.com/sherlock-project/sherlock).
+# Pulls pandas/openpyxl; import is lazy so the bot runs even if removed.
+sherlock-project>=0.16,<1
+
+# Optional but recommended on Voroa: survives deploys for the Instagram
+# session (Voroa has no persistent disks). Only used when REDIS_URL is set.
+redis>=5,<7
