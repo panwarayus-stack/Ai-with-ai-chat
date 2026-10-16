@@ -115,6 +115,8 @@ class Application:
                 session_file=cfg.session_file_path(),
                 store=store,
                 verification_code=cfg.ig_verification_code,
+                verification_file=cfg.verification_file_path(),
+                verification_wait=cfg.ig_verification_wait,
             ),
             sherlock=SherlockService(
                 enabled=cfg.sherlock_enabled,
@@ -289,6 +291,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Validate configuration and imports, then exit (no network, no login).",
     )
+    parser.add_argument(
+        "--set-credentials",
+        nargs="+",
+        metavar="USERNAME",
+        help=(
+            "Store Instagram credentials at runtime (works via SSH while the "
+            "bot waits). Usage: --set-credentials <username>  (password is "
+            "prompted securely)  or  --set-credentials <username> <password>."
+        ),
+    )
+    parser.add_argument(
+        "--set-code",
+        metavar="CODE",
+        help="Provide a live one-time verification code (2FA/OTP) without restarting.",
+    )
+    parser.add_argument(
+        "--clear-code",
+        action="store_true",
+        help="Remove a stored verification code.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -299,16 +321,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _setup_logging(config.log_level)
 
+    if args.set_credentials or args.set_code or args.clear_code:
+        return _run_live_config(config, args)
+
     if args.check:
         return _run_check(config)
 
     errors = config.validate_for_run()
     if errors:
+        # Missing configuration must NOT crash-loop the worker: the login
+        # flow waits for live credentials (dashboard env or SSH --set-credentials)
+        # so the service stays up and reachable. Only --check treats this as
+        # a hard failure.
         for err in errors:
-            logger.error("Config error: %s", err)
-        logger.error("Fix the environment variables above and restart (see .env.example).")
-        return 2
-
+            logger.warning("Config note: %s", err)
     for note in config.soft_warnings():
         logger.warning("Config note: %s", note)
     logger.info("Starting with configuration: %s", config.summary())
@@ -324,6 +350,72 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _run_live_config(config: Config, args) -> int:
+    """Live configuration commands (run via SSH while the bot is waiting).
+
+    * ``--set-credentials <username> [password]`` — store login credentials
+      (password prompted securely when omitted).
+    * ``--set-code <code>`` — deliver a one-time 2FA/verification code.
+    * ``--clear-code`` — remove a stored code.
+
+    Values go to the configured session store (files under ``auth/``, or
+    Redis when ``REDIS_URL`` is set) and the running bot picks them up on its
+    next poll — no restart needed. Never prints secrets back.
+    """
+    import getpass
+
+    from src.services.instagram import InstagramService
+    from src.services.session_store import build_session_store
+
+    store = build_session_store(config.redis_url, config.session_file_path().parent / "state")
+    service = InstagramService(
+        username=config.ig_username,
+        password=config.ig_password,
+        session_file=config.session_file_path(),
+        store=store,
+        verification_code=config.ig_verification_code,
+        verification_file=config.verification_file_path(),
+        verification_wait=config.ig_verification_wait,
+    )
+
+    try:
+        if args.set_credentials:
+            parts = args.set_credentials
+            if len(parts) == 1:
+                username = parts[0]
+                password = getpass.getpass("Instagram password (input hidden): ")
+            elif len(parts) == 2:
+                username, password = parts[0], parts[1]
+                print(
+                    "Note: a password passed on the command line may be saved in "
+                    "shell history. Prefer: python app.py --set-credentials <username>"
+                )
+            else:
+                print("Usage: python app.py --set-credentials <username> [password]", file=sys.stderr)
+                return 2
+            service.provide_credentials(username, password)
+            print(
+                f"Credentials stored for @{username.strip()}. The waiting bot will "
+                "continue its login automatically (no restart needed)."
+            )
+        if args.set_code:
+            service.provide_verification_code(args.set_code)
+            print(
+                "Verification code stored. The waiting bot will use it automatically "
+                "(codes are one-time and are cleared after login)."
+            )
+        if args.clear_code:
+            service.clear_verification_code()
+            print("Stored verification code cleared.")
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # pragma: no cover - store failures
+        print(f"Could not store the value: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _run_check(config: Config) -> int:
     """`python app.py --check`: validate everything short of logging in."""
     ok = True
@@ -333,6 +425,11 @@ def _run_check(config: Config) -> int:
         ok = False
         for err in errors:
             print(f"[error] {err}")
+        print(
+            "[hint]  Missing credentials no longer stop the running bot: it waits "
+            "and can be configured live via SSH — python app.py --set-credentials "
+            "<username>  (password prompted) — or via the Voroa Environment tab."
+        )
     for note in config.soft_warnings():
         print(f"[note]  {note}")
 

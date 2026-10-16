@@ -202,6 +202,13 @@ WIKIPEDIA_USER_AGENT=InstagramBot/1.0 (https://your.domain; you@example.com)
 Voroa encrypts service environment variables and does not echo them back.
 Copy the rest from `.env.example` as needed.
 
+**No time to set them now? Deploy first, configure later.** If
+`IG_USERNAME`/`IG_PASSWORD` are missing the worker no longer crash-loops: it
+starts, logs what is missing, and **waits** — staying up and SSH-reachable —
+until you provide them live (see
+[Live configuration via SSH](#live-configuration-via-ssh)). The same is true
+for one-time 2FA codes.
+
 ### 4. Session persistence — read before first deploy
 
 **Voroa has no persistent disks today** (their docs: "Persistent disks are
@@ -219,6 +226,49 @@ How this bot handles it:
   (Redis)** URL (the free plan includes one database). The session and the
   processed-message list are stored there and survive deploys and restarts.
   Files are still written as a write-through cache.
+
+### Live configuration via SSH (credentials & OTP)
+
+You do **not** have to finish configuration before deploying. The bot is
+built for "configure later":
+
+1. Deploy even with the environment still empty. The worker starts, logs what
+   is missing, and **waits** (no crash-loop, no Instagram calls while
+   waiting). Voroa shows it as running and SSH stays available.
+2. Open a terminal: Voroa dashboard → your service → **SSH**.
+3. Provide values live — the waiting bot picks them up within seconds, no
+   restart needed:
+
+```bash
+# Instagram login (password is prompted with hidden input)
+python app.py --set-credentials your_bot_username
+
+# One-time 2FA / verification code, when Instagram asks for one
+python app.py --set-code 123456
+
+# Remove a stored code (codes are one-time and cleared after login anyway)
+python app.py --clear-code
+```
+
+How it works:
+
+* Values are written to the session store — files under `auth/` (git-ignored,
+  chmod 600) or Redis when `REDIS_URL` is set. With Redis they even survive
+  redeploys.
+* Live values take priority over dashboard env vars, so you can override a
+  stale `IG_VERIFICATION_CODE` or a wrong password without touching the
+  dashboard.
+* For OTP you can also just write the file directly:
+  `echo 123456 > auth/verification_code.txt` — the bot polls
+  `IG_VERIFICATION_FILE` during login for up to `IG_VERIFICATION_WAIT`
+  seconds (default 300).
+* The dashboard **Environment** tab still works exactly as before — use
+  whichever is faster. Env vars win only when no live value is present.
+
+Security notes: credentials and codes are never printed back or logged, and
+`auth/` is excluded from git. Avoid `--set-credentials user pass` on shared
+machines (the two-argument form can land in shell history); the prompted
+form is always safe.
 
 ### 5. Uptime expectations
 
@@ -248,8 +298,9 @@ How this bot handles it:
   time. Use a secondary account and moderate volume.
 * The bot **does not bypass CAPTCHAs or authentication challenges**. If
   Instagram raises one: approve the login in the Instagram app on a trusted
-  device, then restart the bot. For 2FA accounts set `IG_VERIFICATION_CODE`
-  to the one-time code.
+  device, then restart the bot. For 2FA accounts deliver the one-time code
+  live (`python app.py --set-code <code>` via SSH) or set
+  `IG_VERIFICATION_CODE` — the bot waits for it during login.
 * Expired sessions are detected (`ClientLoginRequired`) and refreshed
   automatically from stored settings or a fresh login.
 * The reference library in the original brief
@@ -310,11 +361,13 @@ Coverage includes (per the delivery checklist):
 
 | Symptom | Fix |
 | --- | --- |
-| `Config error: IG_USERNAME is required` | Set `IG_USERNAME` / `IG_PASSWORD` in the Voroa environment tab (or `.env` locally), then restart. |
+| `IG_USERNAME is required` in the log | The bot is **waiting**, not dead. Two fixes: (a) Voroa dashboard → Environment → set `IG_USERNAME` / `IG_PASSWORD` → Restart, or (b) live via SSH: `python app.py --set-credentials your_bot_username` (password prompted). |
 | `/AI` answers "not configured" | Add `OPENROUTER_API_KEY`. The bot refuses to fake answers. |
 | "OpenRouter rate limit reached" | Free tier ≈20 req/min. Wait a moment; the shared queue serialises requests. |
 | "configured AI model … is unavailable" | Free models rotate off. Pick a current `:free` slug at [openrouter.ai/models](https://openrouter.ai/models) and update `OPENROUTER_MODEL`. `openrouter/free` auto-routes across free models. |
 | Instagram challenge/checkpoint loop | Approve the login in the Instagram app on a trusted device. Set `IG_VERIFICATION_CODE` for 2FA. The bot will not bypass challenges. |
+| Instagram asks for a one-time code | Live (no restart): SSH → `python app.py --set-code 123456`. The bot waits up to `IG_VERIFICATION_WAIT` seconds (default 300) and uses the code automatically. Or set `IG_VERIFICATION_CODE` in the dashboard and restart. |
+| "Instagram rejected the verification code" | Codes expire quickly and are one-time. Get a fresh code and run `python app.py --set-code <code>` again. |
 | Session lost after every redeploy | Set `REDIS_URL` to a Voroa managed Key Value URL (see [session persistence](#session-persistence-important)). |
 | `/Gender` says "quota reached" | Genderize/Nationalize free quotas are small; add `GENDERIZE_API_KEY` / `NATIONALIZE_API_KEY` (one genderize.io key covers both) or retry later. |
 | `/Weather` can't find the city | Use `City, Country` (e.g. `Agra, India`). |

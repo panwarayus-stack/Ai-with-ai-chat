@@ -85,3 +85,23 @@ def test_summary_redacts_secrets():
 def test_model_default_applied_when_empty():
     cfg = Config.from_env(environ={"OPENROUTER_MODEL": ""})
     assert cfg.openrouter_model == DEFAULT_OPENROUTER_MODEL
+
+
+def test_verification_live_fields():
+    from pathlib import Path
+
+    cfg = Config.from_env(
+        environ={
+            "IG_VERIFICATION_WAIT": "60",
+            "IG_VERIFICATION_FILE": "/tmp/live_code.txt",
+        }
+    )
+    assert cfg.ig_verification_wait == 60
+    assert cfg.verification_file_path() == Path("/tmp/live_code.txt")
+
+    cfg = Config.from_env(environ={})
+    assert cfg.ig_verification_wait == 300
+    assert cfg.verification_file_path().name == "verification_code.txt"
+
+    cfg = Config.from_env(environ={"IG_VERIFICATION_WAIT": "0"})
+    assert cfg.ig_verification_wait == 0  # fail-fast mode allowed

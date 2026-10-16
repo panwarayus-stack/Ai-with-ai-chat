@@ -120,6 +120,8 @@ class Config:
     ig_password: str = ""
     ig_session_file: str = DEFAULT_IG_SESSION_FILE
     ig_verification_code: str = ""
+    ig_verification_file: str = "auth/verification_code.txt"
+    ig_verification_wait: int = 300
     ig_poll_interval: int = 20
     ig_poll_amount: int = 20
 
@@ -212,6 +214,11 @@ class Config:
             ig_session_file=_get_str(env, "IG_SESSION_FILE", DEFAULT_IG_SESSION_FILE)
             or DEFAULT_IG_SESSION_FILE,
             ig_verification_code=_get_str(env, "IG_VERIFICATION_CODE"),
+            ig_verification_file=_get_str(env, "IG_VERIFICATION_FILE", "auth/verification_code.txt")
+            or "auth/verification_code.txt",
+            ig_verification_wait=_get_int(
+                env, "IG_VERIFICATION_WAIT", 300, warnings, minimum=0, maximum=3600
+            ),
             ig_poll_interval=_get_int(env, "IG_POLL_INTERVAL", 20, warnings, minimum=5),
             ig_poll_amount=_get_int(env, "IG_POLL_AMOUNT", 20, warnings, minimum=1, maximum=50),
             redis_url=_get_str(env, "REDIS_URL"),
@@ -285,6 +292,10 @@ class Config:
     # ------------------------------------------------------------------ #
     def session_file_path(self) -> Path:
         path = Path(self.ig_session_file)
+        return path if path.is_absolute() else PROJECT_ROOT / path
+
+    def verification_file_path(self) -> Path:
+        path = Path(self.ig_verification_file)
         return path if path.is_absolute() else PROJECT_ROOT / path
 
     def summary(self) -> dict:
