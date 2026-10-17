@@ -70,6 +70,7 @@ class Application:
         self.services = None  # populated by build()
         self._reply_budget = None  # populated by build()
         self._relogin_blocked_until = 0.0
+        self._health_server = None  # populated by _start_health_server()
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="cmd")
         self._futures: List = []
@@ -230,6 +231,7 @@ class Application:
     def run(self) -> None:
         """Login (patiently), then poll the inbox until stopped."""
         self._install_signal_handlers()
+        self._start_health_server()  # platform probes pass even during login waits
         self.services.ai_queue.start()
 
         self._ensure_login()
@@ -260,6 +262,31 @@ class Application:
             self._stop.wait(self._poll_delay(last_activity))
 
         self.shutdown()
+
+    # ------------------------------------------------------------------ #
+    # Health endpoint — platform readiness probe
+    # ------------------------------------------------------------------ #
+    def _start_health_server(self) -> None:
+        """Serve HTTP 200 on ``health_port`` so the deploy health check passes.
+
+        The deploy platform probes the service over HTTP before calling a
+        deploy live (and afterwards). Without a listener that probe fails
+        and the platform aborts the deploy — even when the bot is behaving
+        correctly (e.g. waiting out an Instagram rate limit). Binding fails
+        soft: a worker on a platform without probes just logs and moves on.
+        """
+        from src.lib.health import HealthServer
+
+        port = self.config.health_port
+        if port <= 0:
+            logger.info("Health endpoint disabled (HEALTH_PORT=0)")
+            return
+        try:
+            self._health_server = HealthServer(port)
+            self._health_server.start()
+        except OSError as exc:
+            self._health_server = None
+            logger.warning("Could not bind health endpoint on port %s: %s", port, exc)
 
     # ------------------------------------------------------------------ #
     # Login resilience — never crash-loop
@@ -368,6 +395,11 @@ class Application:
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
+        if self._health_server is not None:
+            try:
+                self._health_server.stop()
+            except Exception:  # pragma: no cover - defensive
+                pass
         try:
             self.services.ai_queue.close(wait=False)
         except Exception:  # pragma: no cover
