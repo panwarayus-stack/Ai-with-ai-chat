@@ -330,6 +330,13 @@ DM is to ask. So the bot cannot literally sleep until pinged; instead it:
 - **Re-login protection:** `sessionid` cookies are persisted and reused
   (see above); invalid credentials abort instead of retrying. Logins are the
   single most suspicious request an automation makes.
+- **Failed logins never crash-loop.** If Instagram refuses a login (rate
+  limit, challenge, wrong password), the process *stays up* and retries
+  slowly — `IG_LOGIN_RETRY_MIN` doubling to `IG_LOGIN_RETRY_MAX` (60 s →
+  30 min), and only every `IG_RATE_LIMIT_COOLDOWN` (20 min) for rate limits
+  and challenges. A crash-loop restarts the bot every ~30 s and hammers the
+  login endpoint; that is precisely what keeps "Rate limit exceeded" and
+  "verify it's you" active.
 
 All of these are environment variables — tune them in the Voroa dashboard.
 If Instagram still challenges the account, raise `IG_MIN_REQUEST_GAP` and
@@ -414,6 +421,8 @@ Coverage includes (per the delivery checklist):
 | Instagram challenge/checkpoint loop | Approve the login in the Instagram app on a trusted device. Set `IG_VERIFICATION_CODE` for 2FA. The bot will not bypass challenges. |
 | Instagram asks for a one-time code | Live (no restart): SSH → `python app.py --set-code 123456`. The bot waits up to `IG_VERIFICATION_WAIT` seconds (default 300) and uses the code automatically. Or set `IG_VERIFICATION_CODE` in the dashboard and restart. |
 | Instagram keeps asking to "verify it's you" | Too many requests for a human account. Raise `IG_POLL_INTERVAL`/`IG_MIN_REQUEST_GAP`, lower `IG_MAX_REPLIES_PER_HOUR`, keep `IG_MARK_SEEN=false`, `IG_REPLY_IN_GROUPS=false` — see [Anti-suspension](#anti-suspension-staying-quiet-on-instagram). |
+| `Rate limit exceeded` (code 1675004) or HTTP 429 at login | Instagram is throttling the login endpoint (usually after many repeated login attempts). The bot now **stays up** and retries every `IG_RATE_LIMIT_COOLDOWN` (default 20 min) instead of crash-looping. Do **not** keep redeploying — each restart is another login attempt. Wait 30–60 minutes, approve any pending "was this you?" prompt in the Instagram app on your phone, then let the bot retry on its own. |
+| Deploy aborted: "your service started and then exited repeatedly" | Fixed: a failed login no longer exits the process. Redeploy after merging this change; if the deploy still aborts, check the Logs tab for the last error before the exit. |
 | Bot replies slower than expected | Working as designed (human-like `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`, request pacing). Only tune these down if the account is challenge-free. |
 | "Instagram rejected the verification code" | Codes expire quickly and are one-time. Get a fresh code and run `python app.py --set-code <code>` again. |
 | Session lost after every redeploy | Set `REDIS_URL` to a Voroa managed Key Value URL (see [session persistence](#session-persistence-important)). |

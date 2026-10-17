@@ -16,6 +16,24 @@ def test_defaults():
     assert cfg.ai_max_queue_size == 50
 
 
+def test_login_resilience_defaults_and_overrides():
+    cfg = Config.from_env(environ={})
+    assert cfg.ig_login_retry_min == 60
+    assert cfg.ig_login_retry_max == 1800
+    assert cfg.ig_rate_limit_cooldown == 1200
+
+    cfg = Config.from_env(
+        environ={
+            "IG_LOGIN_RETRY_MIN": "30",
+            "IG_LOGIN_RETRY_MAX": "600",
+            "IG_RATE_LIMIT_COOLDOWN": "900",
+        }
+    )
+    assert cfg.ig_login_retry_min == 30
+    assert cfg.ig_login_retry_max == 600
+    assert cfg.ig_rate_limit_cooldown == 900
+
+
 def test_openrouter_free_router_is_recognized_as_free():
     """'openrouter/free' (the Free Models Router) must not warn about charges."""
     cfg = Config.from_env(environ={"OPENROUTER_MODEL": "openrouter/free"})

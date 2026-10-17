@@ -34,6 +34,28 @@ from config import Config, ConfigError
 
 logger = logging.getLogger("app")
 
+# Error markers that mean "back off for a LONG time, not a minute": Instagram
+# rate limits (HTTP 429 / payload code 1675004) and challenges/checkpoints.
+# Retrying these quickly only keeps the block active.
+_LONG_COOLDOWN_MARKERS = (
+    "rate limit",
+    "too many requests",
+    "1675004",
+    "429 client",
+    "status 429",
+    "challenge",
+    "checkpoint",
+)
+
+
+def _error_text(exc: Exception) -> str:
+    return getattr(exc, "message", None) or str(exc)
+
+
+def _needs_long_cooldown(exc: Exception) -> bool:
+    text = _error_text(exc).lower()
+    return any(marker in text for marker in _LONG_COOLDOWN_MARKERS)
+
 MAX_WORKERS = 4  # concurrent command handlers (AI calls serialise on the queue)
 
 
@@ -47,6 +69,7 @@ class Application:
         self.config = config
         self.services = None  # populated by build()
         self._reply_budget = None  # populated by build()
+        self._relogin_blocked_until = 0.0
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="cmd")
         self._futures: List = []
@@ -205,17 +228,11 @@ class Application:
     # Main loop
     # ------------------------------------------------------------------ #
     def run(self) -> None:
-        """Login, then poll the inbox until stopped."""
-        from src.services.instagram import InstagramError
-
+        """Login (patiently), then poll the inbox until stopped."""
         self._install_signal_handlers()
         self.services.ai_queue.start()
 
-        try:
-            self.services.instagram.login()
-        except InstagramError as exc:
-            logger.error("Startup login failed: %s", exc.message)
-            raise SystemExit(1) from exc
+        self._ensure_login()
 
         from src.commands.base import COMMANDS
 
@@ -243,6 +260,48 @@ class Application:
             self._stop.wait(self._poll_delay(last_activity))
 
         self.shutdown()
+
+    # ------------------------------------------------------------------ #
+    # Login resilience — never crash-loop
+    # ------------------------------------------------------------------ #
+    def _ensure_login(self) -> None:
+        """Log in — and if it fails, stay up and retry with a slow backoff.
+
+        A failed login must NEVER crash the worker. Exiting makes the
+        platform restart the process, and every restart hammers Instagram's
+        login endpoint again — a crash-loop is exactly what triggers rate
+        limits ("Rate limit exceeded", code 1675004) and "verify it's you"
+        challenges. Instead the process stays alive (and SSH-reachable for
+        ``--set-credentials``) while retrying at a human pace.
+        """
+        attempt = 0
+        while not self._stop.is_set():
+            try:
+                self.services.instagram.login()
+                return
+            except Exception as exc:  # any failure must stay non-fatal
+                attempt += 1
+                delay = self._login_backoff(exc, attempt)
+                logger.error(
+                    "Startup login failed: %s — staying up and retrying in %.1f min "
+                    "(fix credentials live with: python app.py --set-credentials <username>)",
+                    _error_text(exc),
+                    delay / 60,
+                )
+                self._stop.wait(delay)
+
+    def _login_backoff(self, exc: Exception, attempt: int) -> float:
+        """Seconds to wait before the next login attempt.
+
+        Rate limits and challenges get the long cooldown — retrying sooner
+        only keeps the block active. Everything else backs off exponentially
+        from ``ig_login_retry_min`` up to ``ig_login_retry_max``.
+        """
+        cfg = self.config
+        if _needs_long_cooldown(exc):
+            return float(cfg.ig_rate_limit_cooldown)
+        delay = cfg.ig_login_retry_min * (2 ** min(attempt - 1, 6))
+        return float(min(cfg.ig_login_retry_max, delay))
 
     def _poll_delay(self, last_activity: float) -> float:
         """Next poll interval: jittered, and slower while the inbox is idle.
@@ -276,13 +335,22 @@ class Application:
         return new_messages > 0
 
     def _maybe_relogin(self, exc: Exception) -> None:
+        if time.monotonic() < self._relogin_blocked_until:
+            return  # a recent relogin failed — give Instagram a long breather
         text = str(exc).lower()
         if any(marker in text for marker in ("login", "403", "401", "challenge", "checkpoint")):
             logger.info("Attempting Instagram relogin after: %s", exc)
             try:
                 self.services.instagram.relogin()
+                self._relogin_blocked_until = 0.0
             except Exception as relogin_exc:
-                logger.error("Relogin failed: %s", relogin_exc)
+                delay = self._login_backoff(relogin_exc, 1)
+                self._relogin_blocked_until = time.monotonic() + delay
+                logger.error(
+                    "Relogin failed: %s — not retrying for %.1f min",
+                    _error_text(relogin_exc),
+                    delay / 60,
+                )
 
     # ------------------------------------------------------------------ #
     # Lifecycle
@@ -323,12 +391,24 @@ def _image_extension(data: bytes) -> str:
     return ".jpg"
 
 
+_LOG_HANDLER: Optional[logging.Handler] = None
+
+
 def _setup_logging(level: str) -> None:
-    logging.basicConfig(
-        level=getattr(logging, level.upper(), logging.INFO),
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        stream=sys.stdout,
-    )
+    """Attach exactly one stdout handler to the root logger (idempotent).
+
+    Duplicate handlers emit every line twice, which is confusing in the
+    Voroa Logs tab. Foreign handlers (test runners etc.) are left alone.
+    """
+    global _LOG_HANDLER
+    root = logging.getLogger()
+    if _LOG_HANDLER is None or _LOG_HANDLER not in root.handlers:
+        _LOG_HANDLER = logging.StreamHandler(sys.stdout)
+        _LOG_HANDLER.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+        )
+        root.addHandler(_LOG_HANDLER)
+    root.setLevel(getattr(logging, level.upper(), logging.INFO))
     # Never let third-party libs log request bodies (they may hold tokens).
     for noisy in ("urllib3", "instagrapi", "requests"):
         logging.getLogger(noisy).setLevel(logging.WARNING)

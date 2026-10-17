@@ -133,6 +133,13 @@ class Config:
     ig_max_replies_per_hour: int = 20
     ig_mark_seen: bool = False
     ig_reply_in_groups: bool = False
+    # Login resilience — a failed login must never crash-loop the worker.
+    # Exiting makes the platform restart us and every restart hammers
+    # Instagram's login endpoint (the exact pattern that triggers rate
+    # limits and "verify it's you" challenges).
+    ig_login_retry_min: int = 60
+    ig_login_retry_max: int = 1800
+    ig_rate_limit_cooldown: int = 1200
 
     # Persistence (Voroa has no persistent disks)
     redis_url: str = ""
@@ -244,6 +251,15 @@ class Config:
             ),
             ig_mark_seen=_get_bool(env, "IG_MARK_SEEN", False, warnings),
             ig_reply_in_groups=_get_bool(env, "IG_REPLY_IN_GROUPS", False, warnings),
+            ig_login_retry_min=_get_int(
+                env, "IG_LOGIN_RETRY_MIN", 60, warnings, minimum=5, maximum=3600
+            ),
+            ig_login_retry_max=_get_int(
+                env, "IG_LOGIN_RETRY_MAX", 1800, warnings, minimum=30, maximum=7200
+            ),
+            ig_rate_limit_cooldown=_get_int(
+                env, "IG_RATE_LIMIT_COOLDOWN", 1200, warnings, minimum=60, maximum=7200
+            ),
             redis_url=_get_str(env, "REDIS_URL"),
             openrouter_api_key=_get_str(env, "OPENROUTER_API_KEY"),
             openrouter_model=model,
