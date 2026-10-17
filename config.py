@@ -167,6 +167,9 @@ class Config:
     ig_login_retry_min: int = 60
     ig_login_retry_max: int = 1800
     ig_rate_limit_cooldown: int = 1200
+    # Persistent rate limits/challenges back off further each consecutive
+    # failure (doubling), up to this cap (seconds).
+    ig_rate_limit_cooldown_max: int = 7200
 
     # Persistence (Voroa has no persistent disks)
     redis_url: str = ""
@@ -287,6 +290,9 @@ class Config:
             ),
             ig_rate_limit_cooldown=_get_int(
                 env, "IG_RATE_LIMIT_COOLDOWN", 1200, warnings, minimum=60, maximum=7200
+            ),
+            ig_rate_limit_cooldown_max=_get_int(
+                env, "IG_RATE_LIMIT_COOLDOWN_MAX", 7200, warnings, minimum=60, maximum=86400
             ),
             redis_url=_get_str(env, "REDIS_URL"),
             openrouter_api_key=_get_str(env, "OPENROUTER_API_KEY"),

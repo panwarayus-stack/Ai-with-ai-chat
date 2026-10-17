@@ -350,9 +350,11 @@ DM is to ask. So the bot cannot literally sleep until pinged; instead it:
   limit, challenge, wrong password), the process *stays up* and retries
   slowly — `IG_LOGIN_RETRY_MIN` doubling to `IG_LOGIN_RETRY_MAX` (60 s →
   30 min), and only every `IG_RATE_LIMIT_COOLDOWN` (20 min) for rate limits
-  and challenges. A crash-loop restarts the bot every ~30 s and hammers the
-  login endpoint; that is precisely what keeps "Rate limit exceeded" and
-  "verify it's you" active.
+  and challenges. Persistent throttling backs off further each consecutive
+  failure (doubling up to `IG_RATE_LIMIT_COOLDOWN_MAX`, default 2 h) —
+  retrying a throttle too often is what keeps it active. A crash-loop
+  restarts the bot every ~30 s and hammers the login endpoint; that is
+  precisely what keeps "Rate limit exceeded" and "verify it's you" active.
 
 All of these are environment variables — tune them in the Voroa dashboard.
 If Instagram still challenges the account, raise `IG_MIN_REQUEST_GAP` and
@@ -444,7 +446,7 @@ Coverage includes (per the delivery checklist):
 | Instagram challenge/checkpoint loop | Approve the login in the Instagram app on a trusted device. Set `IG_VERIFICATION_CODE` for 2FA. The bot will not bypass challenges. |
 | Instagram asks for a one-time code | Live (no restart): SSH → `python app.py --set-code 123456`. The bot waits up to `IG_VERIFICATION_WAIT` seconds (default 300) and uses the code automatically. Or set `IG_VERIFICATION_CODE` in the dashboard and restart. |
 | Instagram keeps asking to "verify it's you" | Too many requests for a human account. Raise `IG_POLL_INTERVAL`/`IG_MIN_REQUEST_GAP`, lower `IG_MAX_REPLIES_PER_HOUR`, keep `IG_MARK_SEEN=false`, `IG_REPLY_IN_GROUPS=false` — see [Anti-suspension](#anti-suspension-staying-quiet-on-instagram). |
-| `Rate limit exceeded` (code 1675004) or HTTP 429 at login | Instagram is throttling the login endpoint (usually after many repeated login attempts). The bot now **stays up** and retries every `IG_RATE_LIMIT_COOLDOWN` (default 20 min) instead of crash-looping. Do **not** keep redeploying — each restart is another login attempt. Wait 30–60 minutes, approve any pending "was this you?" prompt in the Instagram app on your phone, then let the bot retry on its own. |
+| `Rate limit exceeded` (code 1675004) or HTTP 429 at login | Instagram is throttling the login endpoint (usually after many repeated login attempts). The bot now **stays up** and retries every `IG_RATE_LIMIT_COOLDOWN` (default 20 min), doubling each consecutive failure up to `IG_RATE_LIMIT_COOLDOWN_MAX` (default 2 h). Do **not** keep redeploying — each restart is another login attempt. Wait it out (can take hours), approve any pending "was this you?" prompt in the Instagram app on your phone, then let the bot retry on its own. |
 | Deploy aborted: "your service started and then exited repeatedly" | Fixed: a failed login no longer exits the process. Redeploy after merging this change; if the deploy still aborts, check the Logs tab for the last error before the exit. |
 | Deploy aborted: "your service did not pass its health check" | The platform probed the service over HTTP and nothing answered. Fixed: the bot serves a 200 endpoint on `HEALTH_PORT`/`$PORT` (see [Health check](#health-check--the-deploy-will-not-go-live-without-it)). Redeploy after merging. |
 | Bot replies slower than expected | Working as designed (human-like `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`, request pacing). Only tune these down if the account is challenge-free. |

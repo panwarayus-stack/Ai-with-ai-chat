@@ -326,6 +326,52 @@ def test_rate_limit_login_uses_long_cooldown(config):
     assert application._login_backoff(challenge, 1) == float(config.ig_rate_limit_cooldown)
 
 
+def test_persistent_rate_limits_wait_longer_each_time(config):
+    """A throttle that never clears must not be retried every 20 min forever."""
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch=None)
+    rate_limited = InstagramError("Rate limit exceeded code 1675004")
+
+    base = float(config.ig_rate_limit_cooldown)
+    assert application._login_backoff(rate_limited, 1, slowdown_streak=1) == base
+    assert application._login_backoff(rate_limited, 1, slowdown_streak=2) == base * 2
+    assert application._login_backoff(rate_limited, 1, slowdown_streak=3) == base * 4
+    # Capped at IG_RATE_LIMIT_COOLDOWN_MAX.
+    assert (
+        application._login_backoff(rate_limited, 1, slowdown_streak=30)
+        == float(config.ig_rate_limit_cooldown_max)
+    )
+
+
+def test_run_stops_quietly_when_shutdown_interrupts_login(config, monkeypatch):
+    """SIGTERM during a login wait: no misleading 'Bot is running' line."""
+    import app as app_mod
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch)
+    stub = FailingLoginInstagram(InstagramError("Rate limit exceeded 1675004"))
+    application.services.instagram = stub
+
+    def fake_wait(delay=None):
+        application._stop.set()  # simulates SIGTERM mid-wait
+        return True
+
+    monkeypatch.setattr(application._stop, "wait", fake_wait)
+    monkeypatch.setattr(application, "_install_signal_handlers", lambda: None)
+
+    messages = []
+    monkeypatch.setattr(
+        app_mod.logger, "info", lambda msg, *a, **k: messages.append(msg % a if a else msg)
+    )
+
+    application.run()  # must complete promptly without hanging
+
+    joined = " | ".join(str(m) for m in messages)
+    assert "Bot is running" not in joined, "must not claim to run when login never happened"
+    assert "Shutdown complete" in joined
+
+
 def test_login_backoff_grows_and_caps(config, monkeypatch):
     from src.services.instagram import InstagramError
 

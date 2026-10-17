@@ -56,6 +56,22 @@ def _needs_long_cooldown(exc: Exception) -> bool:
     text = _error_text(exc).lower()
     return any(marker in text for marker in _LONG_COOLDOWN_MARKERS)
 
+
+def _login_failure_hint(exc: Exception) -> str:
+    """Actionable advice for the failure type — don't blame credentials for a throttle."""
+    text = _error_text(exc).lower()
+    if "rate limit" in text or "too many requests" in text or "1675004" in text:
+        return (
+            "Instagram is throttling logins — this clears with time; do NOT redeploy "
+            "or keep retrying, each login attempt keeps the throttle active"
+        )
+    if "challenge" in text or "checkpoint" in text:
+        return (
+            "approve the pending 'was this you?' prompt in the Instagram app on your "
+            "phone; the bot retries automatically"
+        )
+    return "fix credentials live with: python app.py --set-credentials <username>"
+
 MAX_WORKERS = 4  # concurrent command handlers (AI calls serialise on the queue)
 
 
@@ -234,7 +250,10 @@ class Application:
         self._start_health_server()  # platform probes pass even during login waits
         self.services.ai_queue.start()
 
-        self._ensure_login()
+        if not self._ensure_login():
+            logger.info("Stopped before login completed — shutting down")
+            self.shutdown()
+            return
 
         from src.commands.base import COMMANDS
 
@@ -291,7 +310,7 @@ class Application:
     # ------------------------------------------------------------------ #
     # Login resilience — never crash-loop
     # ------------------------------------------------------------------ #
-    def _ensure_login(self) -> None:
+    def _ensure_login(self) -> bool:
         """Log in — and if it fails, stay up and retry with a slow backoff.
 
         A failed login must NEVER crash the worker. Exiting makes the
@@ -300,33 +319,50 @@ class Application:
         limits ("Rate limit exceeded", code 1675004) and "verify it's you"
         challenges. Instead the process stays alive (and SSH-reachable for
         ``--set-credentials``) while retrying at a human pace.
+
+        Persistent rate limits/challenges back off further each consecutive
+        failure, because retrying a throttle too often keeps it active.
+
+        Returns True once logged in, False if stopping interrupted the wait.
         """
         attempt = 0
+        slowdown_streak = 0
         while not self._stop.is_set():
             try:
                 self.services.instagram.login()
-                return
+                return True
             except Exception as exc:  # any failure must stay non-fatal
                 attempt += 1
-                delay = self._login_backoff(exc, attempt)
+                if _needs_long_cooldown(exc):
+                    slowdown_streak += 1
+                else:
+                    slowdown_streak = 0
+                delay = self._login_backoff(exc, attempt, slowdown_streak)
                 logger.error(
-                    "Startup login failed: %s — staying up and retrying in %.1f min "
-                    "(fix credentials live with: python app.py --set-credentials <username>)",
+                    "Startup login failed: %s — staying up and retrying in %.1f min (%s)",
                     _error_text(exc),
                     delay / 60,
+                    _login_failure_hint(exc),
                 )
                 self._stop.wait(delay)
+        return False
 
-    def _login_backoff(self, exc: Exception, attempt: int) -> float:
+    def _login_backoff(
+        self, exc: Exception, attempt: int, slowdown_streak: int = 1
+    ) -> float:
         """Seconds to wait before the next login attempt.
 
         Rate limits and challenges get the long cooldown — retrying sooner
-        only keeps the block active. Everything else backs off exponentially
-        from ``ig_login_retry_min`` up to ``ig_login_retry_max``.
+        only keeps the block active — and each consecutive one waits longer
+        (doubling up to ``ig_rate_limit_cooldown_max``). Everything else
+        backs off exponentially from ``ig_login_retry_min`` up to
+        ``ig_login_retry_max``.
         """
         cfg = self.config
         if _needs_long_cooldown(exc):
-            return float(cfg.ig_rate_limit_cooldown)
+            streak = max(1, slowdown_streak)
+            delay = cfg.ig_rate_limit_cooldown * (2 ** min(streak - 1, 6))
+            return float(min(cfg.ig_rate_limit_cooldown_max, delay))
         delay = cfg.ig_login_retry_min * (2 ** min(attempt - 1, 6))
         return float(min(cfg.ig_login_retry_max, delay))
 
