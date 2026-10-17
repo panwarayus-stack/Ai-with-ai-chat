@@ -260,3 +260,93 @@ def test_group_threads_used_when_enabled(tmp_path):
     service._client = client
     messages = service.fetch_unread()
     assert [m.message_id for m in messages] == ["m2"]
+
+
+# ---------------------------------------------------------------------- #
+# Login resilience — a failed login must NEVER crash-loop
+# ---------------------------------------------------------------------- #
+class FailingLoginInstagram(StubInstagram):
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+        self.login_calls = 0
+
+    def login(self):
+        self.login_calls += 1
+        raise self.error
+
+    def relogin(self):
+        self.login_calls += 1
+        raise self.error
+
+
+def test_login_failure_keeps_bot_up_and_backs_off(config, monkeypatch):
+    """No SystemExit, no crash-loop: slow exponential retries instead."""
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch)
+    stub = FailingLoginInstagram(InstagramError("Instagram login failed: boom"))
+    application.services.instagram = stub
+
+    waits = []
+
+    def fake_wait(delay=None):
+        waits.append(delay)
+        if len(waits) >= 3:
+            application._stop.set()
+        return True
+
+    monkeypatch.setattr(application._stop, "wait", fake_wait)
+
+    application._ensure_login()  # must return normally, never SystemExit
+
+    assert stub.login_calls == 3
+    assert waits == [60.0, 120.0, 240.0]  # doubles from IG_LOGIN_RETRY_MIN
+
+
+def test_rate_limit_login_uses_long_cooldown(config):
+    """Retrying a rate limit quickly keeps it active — wait it out."""
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch=None)
+    rate_limited = InstagramError(
+        "Instagram login failed: [{'message': 'Rate limit exceeded', "
+        "'severity': 'CRITICAL', 'code': 1675004}]"
+    )
+    assert application._login_backoff(rate_limited, 1) == float(config.ig_rate_limit_cooldown)
+    assert application._login_backoff(rate_limited, 9) == float(config.ig_rate_limit_cooldown)
+
+    http_429 = InstagramError("429 Client Error: for url: https://b.i.instagram.com/api/v1/bloks/...")
+    assert application._login_backoff(http_429, 1) == float(config.ig_rate_limit_cooldown)
+
+    challenge = InstagramError(
+        "Instagram raised an authentication challenge/checkpoint. "
+        "Approve it in the Instagram app, then restart the bot."
+    )
+    assert application._login_backoff(challenge, 1) == float(config.ig_rate_limit_cooldown)
+
+
+def test_login_backoff_grows_and_caps(config, monkeypatch):
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch)
+    err = InstagramError("temporary network trouble")
+
+    assert application._login_backoff(err, 1) == 60.0
+    assert application._login_backoff(err, 2) == 120.0
+    assert application._login_backoff(err, 3) == 240.0
+    assert application._login_backoff(err, 20) == float(config.ig_login_retry_max)
+
+
+def test_relogin_failure_cools_down(config, monkeypatch):
+    """After a failed relogin the bot must not hammer login on every poll."""
+    from src.services.instagram import InstagramError
+
+    application, _ = _application_with_stub(config, monkeypatch)
+    stub = FailingLoginInstagram(InstagramError("Instagram login failed: nope"))
+    application.services.instagram = stub
+
+    application._maybe_relogin(Exception("401 login expired"))
+    assert stub.login_calls == 1
+    application._maybe_relogin(Exception("401 login expired"))  # still cooling down
+    assert stub.login_calls == 1
