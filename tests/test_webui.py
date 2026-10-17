@@ -246,6 +246,50 @@ def test_favicon_is_public_and_silent(client):
 
 
 # ---------------------------------------------------------------------- #
+# Session import (no server-side login)
+# ---------------------------------------------------------------------- #
+SESSION_DUMP = (
+    '{"cookies": {"sessionid": "4242%3Aabcdef%3A27", "ds_user_id": "4242"},'
+    ' "authorization_data": {"ds_user_id": "4242"}}'
+)
+
+
+def test_import_session_via_dashboard(client, ig):
+    _setup_and_login(client)
+    page = client.get("/credentials").get_data(as_text=True)
+    response = client.post(
+        "/credentials",
+        data={"csrf": _csrf(page), "action": "import_session", "session_json": SESSION_DUMP},
+    )
+    assert response.status_code == 200
+    assert "no password login" in response.get_data(as_text=True)
+    assert ig.has_session()
+    # The dump is a secret: never rendered back.
+    assert "4242%3Aabcdef" not in response.get_data(as_text=True)
+
+
+def test_import_session_rejects_garbage(client, ig):
+    _setup_and_login(client)
+    page = client.get("/credentials").get_data(as_text=True)
+    response = client.post(
+        "/credentials",
+        data={"csrf": _csrf(page), "action": "import_session", "session_json": "not json"},
+    )
+    assert response.status_code == 200
+    assert "not valid JSON" in response.get_data(as_text=True)
+    assert not ig.has_session()
+
+
+def test_clear_session_via_dashboard(client, ig):
+    _setup_and_login(client)
+    ig.provide_session(SESSION_DUMP)
+    page = client.get("/credentials").get_data(as_text=True)
+    response = client.post("/credentials", data={"csrf": _csrf(page), "action": "clear_session"})
+    assert response.status_code == 200
+    assert not ig.has_session()
+
+
+# ---------------------------------------------------------------------- #
 # Settings & status & logs
 # ---------------------------------------------------------------------- #
 def test_settings_round_trip(client, store):

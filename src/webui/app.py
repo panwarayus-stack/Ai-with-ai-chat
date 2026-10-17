@@ -273,6 +273,15 @@ def create_app(config, store, instagram) -> Flask:
                 elif action == "save_code":
                     instagram.provide_verification_code(request.form.get("code") or "")
                     message = "Verification code saved. The bot will use it automatically (one-time)."
+                elif action == "import_session":
+                    instagram.provide_session(request.form.get("session_json") or "")
+                    message = (
+                        "Session imported. The bot will sign in with it — no password "
+                        "login — and picks it up automatically (no restart needed)."
+                    )
+                elif action == "clear_session":
+                    instagram.clear_session()
+                    message = "Stored Instagram session cleared."
                 elif action == "clear_code":
                     instagram.clear_verification_code()
                     message = "Stored verification code cleared."
@@ -289,6 +298,7 @@ def create_app(config, store, instagram) -> Flask:
             current_user=current_user,
             has_credentials=instagram.has_credentials(),
             has_code=bool(instagram.has_live_code()),
+            has_session=instagram.has_session(),
         )
 
     # ---- settings ---------------------------------------------------- #

@@ -54,11 +54,14 @@ PROCESSED_MEMORY_LIMIT = 2000  # bounded in-memory id set
 PROCESSED_PERSIST_LIMIT = 500  # bounded persisted id set
 
 _MISSING_CREDS_INSTRUCTIONS = (
-    "Instagram credentials are not configured. Provide them either way: "
-    "(1) Voroa dashboard -> Service -> Environment -> IG_USERNAME and "
-    "IG_PASSWORD (then Restart), or (2) live via SSH, without restarting: "
+    "Instagram credentials are not configured — and no session has been "
+    "imported. Provide either: (1) a locally generated session (run "
+    "'python app.py --login-only' on your machine, then dashboard -> Login & "
+    "codes -> Import session) so the server never password-logs-in at all, "
+    "(2) Voroa dashboard -> Service -> Environment -> IG_USERNAME and "
+    "IG_PASSWORD (then Restart), or (3) live via SSH, without restarting: "
     "python app.py --set-credentials <username>  (the password is prompted "
-    "securely). The bot keeps waiting until they arrive."
+    "securely). The bot keeps waiting until one of them arrives."
 )
 
 
@@ -155,6 +158,48 @@ class InstagramService:
         username, password = self.resolve_credentials()
         return bool(username and password)
 
+    # ------------------------------------------------------------------ #
+    # Live configuration: session import (no server-side login)
+    # ------------------------------------------------------------------ #
+    def provide_session(self, raw: str) -> None:
+        """Store an instagrapi session dump (dashboard / ``--import-session``).
+
+        A session generated on a trusted machine (``python app.py
+        --login-only``) lets the server sign in **without any password
+        login** — Instagram's login endpoint is never touched while the
+        session lasts. That matters on hosts whose IP is already throttled
+        by repeated logins. The dump is structurally validated here; the
+        next sign-in attempt proves it with Instagram itself.
+        """
+        raw = (raw or "").strip()
+        if not raw:
+            raise ValueError("Paste the contents of a session file (instagrapi settings JSON)")
+        try:
+            settings = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError("That is not valid JSON — paste the session file contents unchanged") from exc
+        if not isinstance(settings, dict) or not (settings.get("cookies") or settings.get("authorization_data")):
+            raise ValueError(
+                "This does not look like an instagrapi session dump (no cookies). "
+                "Generate one with: python app.py --login-only"
+            )
+        self._store_session_payload(json.dumps(settings))
+        logger.info("Instagram session imported — the bot will sign in without a password login")
+
+    def has_session(self) -> bool:
+        """True when a stored session exists (store or session file)."""
+        if self.store.get(SESSION_KEY):
+            return True
+        try:
+            return self.session_file.exists() and self.session_file.stat().st_size > 0
+        except OSError:  # pragma: no cover - defensive
+            return False
+
+    def clear_session(self) -> None:
+        """Forget the stored session (a password login may follow)."""
+        self._clear_session()
+        logger.info("Stored Instagram session cleared")
+
     def _set_status(self, state: str, detail: str = "") -> None:
         """Publish what the bot is waiting for (shown on the web dashboard)."""
         try:
@@ -165,24 +210,38 @@ class InstagramService:
             pass
 
     def _ensure_credentials(self, timeout: Optional[float] = None, poll: float = 2.0):
-        """Return credentials, waiting for live ones when missing.
+        """Return credentials, waiting while the dashboard can still supply them.
 
         With ``timeout=None`` the bot waits indefinitely — the process stays
-        up (SSH remains available) until credentials arrive. Waiting performs
-        **no** network calls, so repeated restarts cannot trip Instagram.
+        up (SSH remains available) until something usable arrives. Waiting
+        performs **no** network calls, so repeated restarts cannot trip
+        Instagram.
+
+        The wait also ends when a session is imported (sessions need no
+        password at all); the caller then gets empty strings and must sign
+        in with the session.
         """
         if self.has_credentials():
             return self.resolve_credentials()
+        if self.has_session():
+            logger.info("Imported Instagram session present — no credentials needed")
+            return "", ""
 
         deadline = None if timeout is None else time.monotonic() + timeout
         logger.error(_MISSING_CREDS_INSTRUCTIONS)
-        self._set_status("waiting_credentials", "no Instagram credentials yet — add them on the dashboard")
+        self._set_status(
+            "waiting_credentials",
+            "waiting for dashboard credentials or an imported session",
+        )
         last_reminder = time.monotonic()
         while True:
             time.sleep(poll)
             if self.has_credentials():
                 logger.info("Live Instagram credentials received — continuing login")
                 return self.resolve_credentials()
+            if self.has_session():
+                logger.info("Imported Instagram session received — continuing without a password login")
+                return "", ""
             if deadline is not None and time.monotonic() >= deadline:
                 raise InstagramError(
                     "No Instagram credentials arrived within the wait window. "
@@ -269,11 +328,18 @@ class InstagramService:
         return self._client
 
     def login(self) -> None:
-        """Log in, reusing a cached session when Instagram still accepts it.
+        """Sign in: stored session first, password login only when necessary.
 
-        Missing credentials never crash the process: the bot waits for them.
-        When Instagram demands a one-time code, the bot waits for a live one
-        (``--set-code`` / ``IG_VERIFICATION_FILE``) before retrying once.
+        A stored session (imported from a local ``--login-only`` run, or kept
+        from an earlier login) is tried first and needs no credentials — the
+        server performs **no** password login while Instagram accepts it.
+        The password path runs only when no session exists or Instagram
+        rejects it, so a flaky check can never trigger a surprise login.
+
+        Missing credentials never crash the process: the bot waits for a
+        session or credentials to arrive. When Instagram demands a one-time
+        code, the bot waits for a live one (``--set-code`` /
+        ``IG_VERIFICATION_FILE``) before retrying once.
         """
         from instagrapi.exceptions import (
             BadCredentials,
@@ -284,10 +350,21 @@ class InstagramService:
             TwoFactorRequired,
         )
 
-        username, password = self._ensure_credentials()
-
         with self._lock:
-            self._restore_session()
+            if self._try_cached_session():
+                return
+            username, password = self._ensure_credentials()
+            if not (username and password):
+                # A session arrived while we were waiting — or the stored one
+                # was rejected and nothing else can sign us in.
+                if self._try_cached_session():
+                    return
+                raise InstagramError(
+                    "The imported Instagram session was rejected and no credentials "
+                    "are stored. Import a fresh session on the dashboard (Login & "
+                    "codes -> Import session) or store credentials — the bot keeps "
+                    "waiting and retrying."
+                )
             code = self.resolve_verification_code()
             try:
                 self._do_login(username, password, code)
@@ -332,6 +409,34 @@ class InstagramService:
         ok = self.client.login(username, password, verification_code=code or "")
         if not ok:
             raise InstagramError("Instagram login returned failure without details.")
+
+    def _try_cached_session(self) -> bool:
+        """Sign in from a stored session — no password, no login endpoint.
+
+        The preferred path: an old or locally generated session is restored
+        and probed with one lightweight request. If Instagram still accepts
+        it we are done — nothing else is sent. If Instagram explicitly
+        rejects it the session is cleared and the caller may password-login.
+        Any other failure (network blip, throttle) is raised, because it is
+        NOT proof the session is dead and must never silently trigger a
+        password login.
+        """
+        from instagrapi.exceptions import ClientLoginRequired, LoginRequired
+
+        if not self._restore_session():
+            return False
+        try:
+            self.client.get_timeline_feed()
+        except (ClientLoginRequired, LoginRequired):
+            logger.info("Stored Instagram session is no longer valid — clearing it")
+            self._clear_session()
+            return False
+        except Exception as exc:
+            raise InstagramError(f"Could not verify the stored session: {exc}") from exc
+        self._persist_session()
+        self._set_status("online", "signed in with the stored session — no password login")
+        logger.info("Signed in with the stored Instagram session (no password login)")
+        return True
 
     def _on_login_success(self, username: str) -> None:
         self._persist_session()
@@ -395,22 +500,25 @@ class InstagramService:
     # ------------------------------------------------------------------ #
     # Session persistence
     # ------------------------------------------------------------------ #
-    def _restore_session(self) -> None:
+    def _restore_session(self) -> bool:
+        """Load the stored session (store first, then file) into the client."""
         raw = self.store.get(SESSION_KEY)
         if raw is None and self.session_file.exists():
             raw = self.session_file.read_text(encoding="utf-8")
         if not raw:
-            return
+            return False
         try:
             settings = json.loads(raw)
         except json.JSONDecodeError:
             logger.warning("Stored session is corrupt; ignoring it")
-            return
+            return False
         try:
             self.client.set_settings(settings)
             logger.debug("Restored Instagram session from store")
+            return True
         except Exception as exc:
             logger.warning("Could not restore session: %s", exc)
+            return False
 
     def _persist_session(self) -> None:
         try:
@@ -418,7 +526,9 @@ class InstagramService:
         except Exception as exc:  # pragma: no cover - defensive
             logger.warning("Could not read session settings: %s", exc)
             return
-        payload = json.dumps(settings)
+        self._store_session_payload(json.dumps(settings))
+
+    def _store_session_payload(self, payload: str) -> None:
         self.store.set(SESSION_KEY, payload)
         # Mirror to the configured file path (skipped when it is the store root).
         try:
