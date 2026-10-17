@@ -85,8 +85,10 @@ class Application:
         self.config = config
         self.services = None  # populated by build()
         self._reply_budget = None  # populated by build()
+        self._settings = None  # populated by build()
         self._relogin_blocked_until = 0.0
         self._health_server = None  # populated by _start_health_server()
+        self._web_server = None  # populated by _start_health_server() (web mode)
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="cmd")
         self._futures: List = []
@@ -99,6 +101,7 @@ class Application:
         from src.lib.ai_queue import AIQueue
         from src.lib.http import HttpClient
         from src.lib.utils import HourlyBudget
+        from src.lib.bot_state import RuntimeSettings
         from src.services.anime import AnimeService
         from src.services.demographics import DemographicsService
         from src.services.images import ImageService
@@ -172,6 +175,7 @@ class Application:
         )
         load_all()  # populate the command registry
         self._reply_budget = HourlyBudget(cfg.ig_max_replies_per_hour)
+        self._settings = RuntimeSettings(store)
 
     # ------------------------------------------------------------------ #
     # Message handling
@@ -222,8 +226,8 @@ class Application:
 
     def _human_delay(self) -> None:
         """Random pause before replying — humans don't answer instantly."""
-        low = self.config.ig_reply_delay_min
-        high = max(low, self.config.ig_reply_delay_max)
+        low = float(self._rt("ig_reply_delay_min", self.config.ig_reply_delay_min))
+        high = max(low, float(self._rt("ig_reply_delay_max", self.config.ig_reply_delay_max)))
         if high <= 0:
             return
         time.sleep(random.uniform(low, high))
@@ -283,29 +287,48 @@ class Application:
         self.shutdown()
 
     # ------------------------------------------------------------------ #
-    # Health endpoint — platform readiness probe
+    # Health endpoint & web dashboard — platform readiness probe
     # ------------------------------------------------------------------ #
     def _start_health_server(self) -> None:
-        """Serve HTTP 200 on ``health_port`` so the deploy health check passes.
+        """Serve HTTP on ``health_port``: the deploy probe and (optionally) the dashboard.
 
         The deploy platform probes the service over HTTP before calling a
-        deploy live (and afterwards). Without a listener that probe fails
-        and the platform aborts the deploy — even when the bot is behaving
-        correctly (e.g. waiting out an Instagram rate limit). Binding fails
+        deploy live. Without a listener that probe fails and the platform
+        aborts the deploy — even when the bot is behaving correctly (e.g.
+        waiting out an Instagram rate limit). When ``WEB_ENABLED`` the same
+        port serves the management dashboard (which includes ``/health``);
+        otherwise a bare always-200 health server answers. Binding fails
         soft: a worker on a platform without probes just logs and moves on.
         """
-        from src.lib.health import HealthServer
-
         port = self.config.health_port
         if port <= 0:
-            logger.info("Health endpoint disabled (HEALTH_PORT=0)")
+            logger.info("Web dashboard & health endpoint disabled (HEALTH_PORT=0)")
             return
         try:
-            self._health_server = HealthServer(port)
-            self._health_server.start()
+            if self.config.web_enabled:
+                from src.webui.app import WebUIServer, create_app
+
+                flask_app = create_app(self.config, self.services.store, self.services.instagram)
+                self._web_server = WebUIServer(flask_app, port)
+                self._web_server.start()
+            else:
+                from src.lib.health import HealthServer
+
+                self._health_server = HealthServer(port)
+                self._health_server.start()
         except OSError as exc:
             self._health_server = None
-            logger.warning("Could not bind health endpoint on port %s: %s", port, exc)
+            self._web_server = None
+            logger.warning("Could not bind health/dashboard port %s: %s", port, exc)
+
+    # ------------------------------------------------------------------ #
+    # Bot status (shown on the web dashboard)
+    # ------------------------------------------------------------------ #
+    def _publish_status(self, state: str, detail: str = "") -> None:
+        from src.lib.bot_state import publish_status
+
+        if self.services is not None and self.services.store is not None:
+            publish_status(self.services.store, state, detail)
 
     # ------------------------------------------------------------------ #
     # Login resilience — never crash-loop
@@ -328,8 +351,10 @@ class Application:
         attempt = 0
         slowdown_streak = 0
         while not self._stop.is_set():
+            self._publish_status("logging_in", "contacting Instagram")
             try:
                 self.services.instagram.login()
+                self._publish_status("online", "logged in — waiting for messages")
                 return True
             except Exception as exc:  # any failure must stay non-fatal
                 attempt += 1
@@ -338,6 +363,10 @@ class Application:
                 else:
                     slowdown_streak = 0
                 delay = self._login_backoff(exc, attempt, slowdown_streak)
+                self._publish_status(
+                    "backing_off",
+                    f"{_error_text(exc)[:120]} — retrying in {delay / 60:.0f} min",
+                )
                 logger.error(
                     "Startup login failed: %s — staying up and retrying in %.1f min (%s)",
                     _error_text(exc),
@@ -366,6 +395,20 @@ class Application:
         delay = cfg.ig_login_retry_min * (2 ** min(attempt - 1, 6))
         return float(min(cfg.ig_login_retry_max, delay))
 
+    def _rt(self, key: str, default):
+        """Dashboard-editable setting, falling back to the configured default."""
+        return self._settings.get(key, default) if self._settings is not None else default
+
+    def _apply_runtime_settings(self) -> None:
+        """Push dashboard settings into the live services (called per poll)."""
+        svc = self.services.instagram
+        svc.min_request_gap = float(self._rt("ig_min_request_gap", self.config.ig_min_request_gap))
+        svc.reply_in_groups = bool(self._rt("ig_reply_in_groups", self.config.ig_reply_in_groups))
+        if self._reply_budget is not None:
+            self._reply_budget.set_limit(
+                int(self._rt("ig_max_replies_per_hour", self.config.ig_max_replies_per_hour))
+            )
+
     def _poll_delay(self, last_activity: float) -> float:
         """Next poll interval: jittered, and slower while the inbox is idle.
 
@@ -374,12 +417,19 @@ class Application:
         from that of a busy automation.
         """
         cfg = self.config
-        idle = time.monotonic() - last_activity >= cfg.ig_idle_after_minutes * 60
-        base = cfg.ig_idle_poll_interval if idle else cfg.ig_poll_interval
+        idle_after = float(self._rt("ig_idle_after_minutes", cfg.ig_idle_after_minutes))
+        idle = time.monotonic() - last_activity >= idle_after * 60
+        if idle:
+            base = float(self._rt("ig_idle_poll_interval", cfg.ig_idle_poll_interval))
+        else:
+            base = float(self._rt("ig_poll_interval", cfg.ig_poll_interval))
         return base * random.uniform(0.85, 1.15)
 
     def _poll_once(self) -> bool:
         """Fetch and dispatch new messages. True when something new arrived."""
+        if self._settings is not None:
+            self._settings.refresh()
+        self._apply_runtime_settings()
         messages = self.services.instagram.fetch_unread(amount=self.config.ig_poll_amount)
         new_messages = 0
         for message in messages:
@@ -391,7 +441,7 @@ class Application:
             self._futures.append(future)
         # Reap finished futures so the list stays bounded.
         self._futures = [f for f in self._futures if not f.done()]
-        if messages and self.config.ig_mark_seen:
+        if messages and self._rt("ig_mark_seen", self.config.ig_mark_seen):
             # Optional: mark threads read (each one is an extra request).
             for thread_id in {m.thread_id for m in messages}:
                 self.services.instagram.mark_thread_seen(thread_id)
@@ -431,11 +481,13 @@ class Application:
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
-        if self._health_server is not None:
-            try:
-                self._health_server.stop()
-            except Exception:  # pragma: no cover - defensive
-                pass
+        for server in (self._health_server, self._web_server):
+            if server is not None:
+                try:
+                    server.stop()
+                except Exception:  # pragma: no cover - defensive
+                    pass
+        self._publish_status("stopped", "shutting down")
         try:
             self.services.ai_queue.close(wait=False)
         except Exception:  # pragma: no cover
@@ -467,8 +519,11 @@ def _setup_logging(level: str) -> None:
 
     Duplicate handlers emit every line twice, which is confusing in the
     Voroa Logs tab. Foreign handlers (test runners etc.) are left alone.
+    A ring buffer handler feeds the web dashboard's log viewer.
     """
     global _LOG_HANDLER
+    from src.lib.bot_state import LOG_BUFFER
+
     root = logging.getLogger()
     if _LOG_HANDLER is None or _LOG_HANDLER not in root.handlers:
         _LOG_HANDLER = logging.StreamHandler(sys.stdout)
@@ -476,6 +531,8 @@ def _setup_logging(level: str) -> None:
             logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
         )
         root.addHandler(_LOG_HANDLER)
+    if LOG_BUFFER not in root.handlers:
+        root.addHandler(LOG_BUFFER)
     root.setLevel(getattr(logging, level.upper(), logging.INFO))
     # Never let third-party libs log request bodies (they may hold tokens).
     for noisy in ("urllib3", "instagrapi", "requests"):

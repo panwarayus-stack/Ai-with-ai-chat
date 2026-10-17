@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Settings · Bot dashboard{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+<p class="muted">Gentle-mode knobs. Saved values are applied by the running bot on its
+next cycle — nothing else to do.</p>
+
+<form method="post" class="card">
+  <input type="hidden" name="csrf" value="{{ session.get('csrf', '') }}">
+  {% for key, spec in specs.items() %}
+  {% set kind, low, high = spec %}
+  <label>{{ key }}
+    {% if kind == 'bool' %}
+    <select name="{{ key }}">
+      <option value="true" {% if values[key] %}selected{% endif %}>on</option>
+      <option value="false" {% if not values[key] %}selected{% endif %}>off</option>
+    </select>
+    {% else %}
+    <input name="{{ key }}" value="{{ values[key] }}" inputmode="decimal"
+           {% if low is not none %}min="{{ low }}" max="{{ high }}"{% endif %}>
+    {% endif %}
+  </label>
+  {% endfor %}
+  <button type="submit">Save settings</button>
+</form>
+
+<form method="post" class="card row">
+  <input type="hidden" name="csrf" value="{{ session.get('csrf', '') }}">
+  <button name="action" value="reset" class="danger">Reset to defaults</button>
+</form>
+
+<p class="muted">Model &amp; API keys live in the deployment environment
+(<code>OPENROUTER_MODEL</code>, <code>OPENROUTER_API_KEY</code>) and need a redeploy to change.</p>
+{% endblock %}

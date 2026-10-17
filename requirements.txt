@@ -19,3 +19,7 @@ sherlock-project>=0.16,<1
 # Optional but recommended on Voroa: survives deploys for the Instagram
 # session (Voroa has no persistent disks). Only used when REDIS_URL is set.
 redis>=5,<7
+
+# Web dashboard (manage the bot in a browser: login, OTP codes, settings,
+# logs). Served on the same port as the platform health probe.
+Flask>=3.0,<4

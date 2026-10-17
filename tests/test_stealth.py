@@ -372,6 +372,35 @@ def test_run_stops_quietly_when_shutdown_interrupts_login(config, monkeypatch):
     assert "Shutdown complete" in joined
 
 
+def test_dashboard_settings_apply_live(config, monkeypatch):
+    """Settings saved on the web dashboard reach the running bot's next cycle."""
+    from src.lib.bot_state import save_settings
+
+    application, stub = _application_with_stub(config, monkeypatch)
+    save_settings(
+        application.services.store,
+        {
+            "ig_poll_interval": 900,
+            "ig_idle_poll_interval": 1200,
+            "ig_min_request_gap": 7.5,
+            "ig_reply_in_groups": True,
+            "ig_max_replies_per_hour": 3,
+        },
+    )
+    application._settings.refresh()
+    application._apply_runtime_settings()
+
+    assert stub.min_request_gap == 7.5
+    assert stub.reply_in_groups is True
+    assert application._reply_budget.limit == 3
+
+    now = time.monotonic()
+    active = application._poll_delay(now)
+    assert 900 * 0.85 <= active <= 900 * 1.15
+    idle = application._poll_delay(now - config.ig_idle_after_minutes * 60 - 1)
+    assert 1200 * 0.85 <= idle <= 1200 * 1.15
+
+
 def test_login_backoff_grows_and_caps(config, monkeypatch):
     from src.services.instagram import InstagramError
 

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Status · Bot dashboard{% endblock %}
+{% block content %}
+<h1>Status</h1>
+<div class="card">
+  <h2>Bot</h2>
+  <p><span class="badge state-{{ bot.state }}">{{ bot.state }}</span>
+     {% if bot.detail %}<span class="muted">{{ bot.detail }}</span>{% endif %}</p>
+  <h2>Instagram login</h2>
+  <ul>
+    <li>Credentials configured: <strong>{{ "yes" if has_credentials else "no — add them under Login &amp; codes" }}</strong></li>
+    <li>One-time code pending: <strong>{{ "yes" if has_code else "no" }}</strong></li>
+  </ul>
+  <h2>Gentle mode (effective)</h2>
+  <ul>
+    <li>Poll every {{ settings.ig_poll_interval }}s (idle: {{ settings.ig_idle_poll_interval }}s after {{ settings.ig_idle_after_minutes }}min)</li>
+    <li>Reply delay {{ settings.ig_reply_delay_min }}–{{ settings.ig_reply_delay_max }}s · min gap {{ settings.ig_min_request_gap }}s</li>
+    <li>Replies/hour: {{ settings.ig_max_replies_per_hour }} · mark seen: {{ settings.ig_mark_seen }} · groups: {{ settings.ig_reply_in_groups }}</li>
+  </ul>
+  <p class="muted"><a href="{{ url_for('settings') }}">Change settings</a></p>
+</div>
+{% endblock %}

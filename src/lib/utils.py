@@ -116,3 +116,8 @@ class HourlyBudget:
     def reset(self) -> None:
         with self._lock:
             self._stamps.clear()
+
+    def set_limit(self, limit: int) -> None:
+        """Change the hourly cap at runtime (dashboard settings)."""
+        with self._lock:
+            self.limit = max(1, int(limit))

@@ -329,7 +329,7 @@ def _commands_loaded():
 
 
 @pytest.fixture
-def config() -> Config:
+def config(tmp_path) -> Config:
     return Config.from_env(
         environ={
             "IG_USERNAME": "testbot",
@@ -337,6 +337,9 @@ def config() -> Config:
             "OPENROUTER_API_KEY": "sk-or-test",
             "AI_REQUEST_TIMEOUT": "10",
             "LOG_LEVEL": "DEBUG",
+            # Keep state files out of the repo during tests.
+            "IG_SESSION_FILE": str(tmp_path / "session.json"),
+            "IG_VERIFICATION_FILE": str(tmp_path / "code.txt"),
             # Keep timing tests fast: no artificial delays or pacing.
             "IG_REPLY_DELAY_MIN": "0",
             "IG_REPLY_DELAY_MAX": "0",

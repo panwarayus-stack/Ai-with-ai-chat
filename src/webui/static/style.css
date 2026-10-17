@@ -1,0 +1,25 @@
+:root { --bg: #f4f5f7; --card: #ffffff; --ink: #1c2333; --muted: #667085; --accent: #3b5bdb; --error: #c0392b; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); }
+.topbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 1.25rem; background: var(--card); border-bottom: 1px solid #e3e6ec; }
+.brand { font-weight: 700; }
+nav { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+nav a { color: var(--accent); text-decoration: none; }
+main { max-width: 46rem; margin: 1.5rem auto; padding: 0 1rem; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1.05rem; margin: 1.25rem 0 .5rem; }
+.card { background: var(--card); border: 1px solid #e3e6ec; border-radius: 10px; padding: 1rem 1.25rem; margin: 1rem 0; }
+label { display: block; margin: .65rem 0; font-size: .95rem; }
+input, select { display: block; width: 100%; margin-top: .3rem; padding: .55rem .7rem; border: 1px solid #cfd4de; border-radius: 8px; font-size: 1rem; }
+button { margin-top: .6rem; padding: .6rem 1.1rem; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font-size: 1rem; cursor: pointer; }
+button.danger { background: var(--error); }
+button.linklike { background: none; color: var(--accent); padding: 0; margin: 0; font-size: 1rem; }
+form.inline { display: inline; }
+form.row { display: flex; gap: .75rem; }
+.muted { color: var(--muted); }
+.flash { background: #e7f6ec; border: 1px solid #b5e0c2; padding: .65rem .9rem; border-radius: 8px; margin: .75rem 0; }
+.flash.error { background: #fdecea; border-color: #f2b8b5; }
+.badge { display: inline-block; padding: .25rem .7rem; border-radius: 999px; background: #e3e6ec; font-size: .85rem; text-transform: uppercase; letter-spacing: .03em; }
+.state-online { background: #d3f9d8; }
+.state-backing_off, .state-waiting_code, .state-waiting_credentials { background: #fff3bf; }
+.logview { background: #101522; color: #d5dbe8; padding: 1rem; border-radius: 10px; overflow-x: auto; font-size: .8rem; line-height: 1.45; max-height: 70vh; }
