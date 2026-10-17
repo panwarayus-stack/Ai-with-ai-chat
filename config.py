@@ -122,8 +122,17 @@ class Config:
     ig_verification_code: str = ""
     ig_verification_file: str = "auth/verification_code.txt"
     ig_verification_wait: int = 300
-    ig_poll_interval: int = 20
+    ig_poll_interval: int = 60
     ig_poll_amount: int = 20
+    # Anti-suspension ("gentle mode") — see README "Avoiding Instagram flags"
+    ig_idle_after_minutes: int = 10
+    ig_idle_poll_interval: int = 180
+    ig_reply_delay_min: int = 3
+    ig_reply_delay_max: int = 10
+    ig_min_request_gap: float = 5.0
+    ig_max_replies_per_hour: int = 20
+    ig_mark_seen: bool = False
+    ig_reply_in_groups: bool = False
 
     # Persistence (Voroa has no persistent disks)
     redis_url: str = ""
@@ -219,8 +228,22 @@ class Config:
             ig_verification_wait=_get_int(
                 env, "IG_VERIFICATION_WAIT", 300, warnings, minimum=0, maximum=3600
             ),
-            ig_poll_interval=_get_int(env, "IG_POLL_INTERVAL", 20, warnings, minimum=5),
+            ig_poll_interval=_get_int(env, "IG_POLL_INTERVAL", 60, warnings, minimum=5),
             ig_poll_amount=_get_int(env, "IG_POLL_AMOUNT", 20, warnings, minimum=1, maximum=50),
+            ig_idle_after_minutes=_get_int(
+                env, "IG_IDLE_AFTER_MINUTES", 10, warnings, minimum=1, maximum=720
+            ),
+            ig_idle_poll_interval=_get_int(
+                env, "IG_IDLE_POLL_INTERVAL", 180, warnings, minimum=30, maximum=3600
+            ),
+            ig_reply_delay_min=_get_int(env, "IG_REPLY_DELAY_MIN", 3, warnings, minimum=0, maximum=60),
+            ig_reply_delay_max=_get_int(env, "IG_REPLY_DELAY_MAX", 10, warnings, minimum=0, maximum=120),
+            ig_min_request_gap=_get_float(env, "IG_MIN_REQUEST_GAP", 5.0, warnings, minimum=0.0),
+            ig_max_replies_per_hour=_get_int(
+                env, "IG_MAX_REPLIES_PER_HOUR", 20, warnings, minimum=1, maximum=300
+            ),
+            ig_mark_seen=_get_bool(env, "IG_MARK_SEEN", False, warnings),
+            ig_reply_in_groups=_get_bool(env, "IG_REPLY_IN_GROUPS", False, warnings),
             redis_url=_get_str(env, "REDIS_URL"),
             openrouter_api_key=_get_str(env, "OPENROUTER_API_KEY"),
             openrouter_model=model,
@@ -280,16 +303,27 @@ class Config:
                 "files only. On Voroa a redeploy wipes the filesystem and the "
                 "bot must log in again (see README, 'Session persistence')."
             )
-        if ":free" not in self.openrouter_model:
+        if not self._is_free_model(self.openrouter_model):
             notes.append(
-                f"OPENROUTER_MODEL={self.openrouter_model!r} is not a ':free' model: "
-                "OpenRouter will charge for /AI and /Gf usage."
+                f"OPENROUTER_MODEL={self.openrouter_model!r} is not a free model: "
+                "OpenRouter will charge for /AI and /Gf usage. Use a ':free' model "
+                "or the 'openrouter/free' router to avoid charges."
             )
         return notes
 
     # ------------------------------------------------------------------ #
     # Introspection
     # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def _is_free_model(slug: str) -> bool:
+        """True for OpenRouter models that cost $0 in tokens.
+
+        Covers explicit ':free' variants and the official Free Models Router
+        ('openrouter/free'), which routes each request to a free model.
+        """
+        return slug.endswith(":free") or slug == "openrouter/free"
+
     def session_file_path(self) -> Path:
         path = Path(self.ig_session_file)
         return path if path.is_absolute() else PROJECT_ROOT / path

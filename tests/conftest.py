@@ -313,6 +313,15 @@ OPENROUTER_OK = {
 # Fixtures
 # ---------------------------------------------------------------------- #
 @pytest.fixture(autouse=True)
+def _no_dotenv(monkeypatch):
+    """Keep tests hermetic: never read the developer's local .env file."""
+    import config as config_module
+
+    if config_module.load_dotenv is not None:
+        monkeypatch.setattr(config_module, "load_dotenv", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
 def _commands_loaded():
     from src.commands import load_all
 
@@ -328,6 +337,11 @@ def config() -> Config:
             "OPENROUTER_API_KEY": "sk-or-test",
             "AI_REQUEST_TIMEOUT": "10",
             "LOG_LEVEL": "DEBUG",
+            # Keep timing tests fast: no artificial delays or pacing.
+            "IG_REPLY_DELAY_MIN": "0",
+            "IG_REPLY_DELAY_MAX": "0",
+            "IG_MIN_REQUEST_GAP": "0",
+            "IG_MARK_SEEN": "false",
         }
     )
 

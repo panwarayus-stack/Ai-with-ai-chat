@@ -90,6 +90,8 @@ class InstagramService:
         verification_code: str = "",
         verification_file: Optional[Path] = None,
         verification_wait: int = 300,
+        min_request_gap: float = 5.0,
+        reply_in_groups: bool = False,
     ):
         self.env_username = username
         self.env_password = password
@@ -98,9 +100,31 @@ class InstagramService:
         self.env_verification_code = verification_code
         self.verification_file = Path(verification_file) if verification_file else None
         self.verification_wait = max(0, int(verification_wait))
+        self.min_request_gap = max(0.0, float(min_request_gap))
+        self.reply_in_groups = bool(reply_in_groups)
         self._lock = threading.RLock()
+        self._pace_lock = threading.Lock()
+        self._last_request = 0.0
         self._client = None
         self._processed: List[str] = self._load_processed()
+
+    # ------------------------------------------------------------------ #
+    # Request pacing (anti-suspension)
+    # ------------------------------------------------------------------ #
+    def _pace(self) -> None:
+        """Enforce a minimum gap between Instagram API calls.
+
+        Keeps the account's request footprint human-like and avoids bursts
+        that trigger Instagram's automated checks. Applied to every inbox
+        poll and every outgoing send (login happens once and is exempt).
+        """
+        if self.min_request_gap <= 0:
+            return
+        with self._pace_lock:
+            wait = self._last_request + self.min_request_gap - time.monotonic()
+            if wait > 0:
+                time.sleep(wait)
+            self._last_request = time.monotonic()
 
     # ------------------------------------------------------------------ #
     # Live configuration: credentials
@@ -399,12 +423,22 @@ class InstagramService:
     # Inbox
     # ------------------------------------------------------------------ #
     def fetch_unread(self, amount: int = 20) -> List[IncomingMessage]:
-        """Return unread messages from other users (never our own)."""
+        """Return unread messages from other users (never our own).
+
+        Group threads are skipped unless ``reply_in_groups`` is enabled —
+        fewer requests and fewer angry group members.
+        """
+        self._pace()
         with self._lock:
             threads = self.client.direct_threads(amount=amount, selected_filter="unread")
             me = self._own_user_id()
             messages: List[IncomingMessage] = []
             for thread in threads:
+                is_group = bool(getattr(thread, "is_group", False)) or (
+                    getattr(thread, "thread_type", "") == "group"
+                )
+                if is_group and not self.reply_in_groups:
+                    continue
                 user_map = {
                     int(getattr(u, "pk", 0)): str(getattr(u, "username", "") or "")
                     for u in (getattr(thread, "users", None) or [])
@@ -430,6 +464,7 @@ class InstagramService:
             return messages
 
     def mark_thread_seen(self, thread_id: int) -> None:
+        self._pace()
         with self._lock:
             try:
                 self.client.direct_send_seen(thread_id)
@@ -440,10 +475,12 @@ class InstagramService:
     # Sending
     # ------------------------------------------------------------------ #
     def send_text(self, thread_id: int, text: str) -> None:
+        self._pace()
         with self._lock:
             self.client.direct_send(text, thread_ids=[thread_id])
 
     def send_photo(self, thread_id: int, path: Path, caption: str = "") -> None:
+        self._pace()
         with self._lock:
             self.client.direct_send_photo(Path(path), thread_ids=[thread_id])
         if caption:
@@ -452,6 +489,7 @@ class InstagramService:
 
     def account_snapshot(self) -> dict:
         """Public info about the *authenticated* account only."""
+        self._pace()
         with self._lock:
             info = self.client.account_info()
         return {

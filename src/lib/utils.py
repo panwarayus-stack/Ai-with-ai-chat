@@ -74,3 +74,45 @@ def chunked(items: Iterable, size: int):
             batch = []
     if batch:
         yield batch
+
+
+class HourlyBudget:
+    """Rolling-window budget (used for Instagram replies per hour).
+
+    Thread-safe and clock-injectable for tests. ``allow()`` records a use and
+    returns False once the limit is reached inside the window.
+    """
+
+    def __init__(self, limit: int, window_seconds: float = 3600.0, clock=None):
+        import threading
+        import time as _time
+        from collections import deque
+
+        self.limit = max(1, int(limit))
+        self.window = float(window_seconds)
+        self._clock = clock or _time.monotonic
+        self._stamps = deque()
+        self._lock = threading.Lock()
+
+    def _prune_locked(self, now: float) -> None:
+        while self._stamps and now - self._stamps[0] >= self.window:
+            self._stamps.popleft()
+
+    def allow(self) -> bool:
+        """Record a use if budget remains; return whether it is permitted."""
+        with self._lock:
+            now = self._clock()
+            self._prune_locked(now)
+            if len(self._stamps) >= self.limit:
+                return False
+            self._stamps.append(now)
+            return True
+
+    def remaining(self) -> int:
+        with self._lock:
+            self._prune_locked(self._clock())
+            return self.limit - len(self._stamps)
+
+    def reset(self) -> None:
+        with self._lock:
+            self._stamps.clear()

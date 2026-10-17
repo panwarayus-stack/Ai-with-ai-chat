@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import signal
 import sys
 import tempfile
@@ -45,6 +46,7 @@ class Application:
     def __init__(self, config: Config):
         self.config = config
         self.services = None  # populated by build()
+        self._reply_budget = None  # populated by build()
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="cmd")
         self._futures: List = []
@@ -56,6 +58,7 @@ class Application:
         from src.commands.base import Services
         from src.lib.ai_queue import AIQueue
         from src.lib.http import HttpClient
+        from src.lib.utils import HourlyBudget
         from src.services.anime import AnimeService
         from src.services.demographics import DemographicsService
         from src.services.images import ImageService
@@ -117,6 +120,8 @@ class Application:
                 verification_code=cfg.ig_verification_code,
                 verification_file=cfg.verification_file_path(),
                 verification_wait=cfg.ig_verification_wait,
+                min_request_gap=cfg.ig_min_request_gap,
+                reply_in_groups=cfg.ig_reply_in_groups,
             ),
             sherlock=SherlockService(
                 enabled=cfg.sherlock_enabled,
@@ -126,12 +131,18 @@ class Application:
             store=store,
         )
         load_all()  # populate the command registry
+        self._reply_budget = HourlyBudget(cfg.ig_max_replies_per_hour)
 
     # ------------------------------------------------------------------ #
     # Message handling
     # ------------------------------------------------------------------ #
     def handle_message(self, message) -> None:
-        """Dispatch one inbox message (runs on a worker thread)."""
+        """Dispatch one inbox message (runs on a worker thread).
+
+        Anti-suspension behaviour: nothing is sent until dispatch produced an
+        actual reply, replies are rate-limited per hour, and each reply waits
+        a random human-like pause before it is typed out.
+        """
         from src.commands.base import CommandContext, dispatch
 
         ctx = CommandContext(
@@ -146,16 +157,36 @@ class Application:
             logger.exception("Unhandled dispatch failure")
             return
         if result is None:
+            return  # not a command — stay silent, cost nothing
+
+        # Keep the account's activity footprint tiny and human-like.
+        if self._reply_budget is not None and not self._reply_budget.allow():
+            logger.warning(
+                "Reply budget reached (IG_MAX_REPLIES_PER_HOUR=%s) — staying quiet to "
+                "protect the account. The budget resets automatically.",
+                self.config.ig_max_replies_per_hour,
+            )
             return
+        self._human_delay()
 
         try:
             if result.image:
                 self._send_image_result(message.thread_id, result)
-            for chunk in result.message_chunks():
+            chunks = result.message_chunks()
+            for index, chunk in enumerate(chunks):
                 self.services.instagram.send_text(message.thread_id, chunk)
-                time.sleep(0.4)  # keep messages ordered and rate-limit friendly
+                if index < len(chunks) - 1:
+                    time.sleep(1.0)  # pause between chunks only
         except Exception as exc:
             logger.error("Failed to reply in thread %s: %s", message.thread_id, exc)
+
+    def _human_delay(self) -> None:
+        """Random pause before replying — humans don't answer instantly."""
+        low = self.config.ig_reply_delay_min
+        high = max(low, self.config.ig_reply_delay_max)
+        if high <= 0:
+            return
+        time.sleep(random.uniform(low, high))
 
     def _send_image_result(self, thread_id: int, result) -> None:
         suffix = _image_extension(result.image)
@@ -195,9 +226,12 @@ class Application:
         )
 
         failures = 0
+        last_activity = time.monotonic()
         while not self._stop.is_set():
             try:
-                self._poll_once()
+                active = self._poll_once()
+                if active:
+                    last_activity = time.monotonic()
                 failures = 0
             except Exception as exc:
                 failures += 1
@@ -206,24 +240,40 @@ class Application:
                 # Bounded exponential backoff, capped at 5 minutes.
                 backoff = min(300, 10 * (2 ** min(failures, 5)))
                 self._stop.wait(backoff)
-            self._stop.wait(self.config.ig_poll_interval)
+            self._stop.wait(self._poll_delay(last_activity))
 
         self.shutdown()
 
-    def _poll_once(self) -> None:
+    def _poll_delay(self, last_activity: float) -> float:
+        """Next poll interval: jittered, and slower while the inbox is idle.
+
+        The bot stays quiet when nobody is talking (it "comes online" only
+        around actual conversations), which keeps the request pattern far
+        from that of a busy automation.
+        """
+        cfg = self.config
+        idle = time.monotonic() - last_activity >= cfg.ig_idle_after_minutes * 60
+        base = cfg.ig_idle_poll_interval if idle else cfg.ig_poll_interval
+        return base * random.uniform(0.85, 1.15)
+
+    def _poll_once(self) -> bool:
+        """Fetch and dispatch new messages. True when something new arrived."""
         messages = self.services.instagram.fetch_unread(amount=self.config.ig_poll_amount)
+        new_messages = 0
         for message in messages:
             if self.services.instagram.is_processed(message.message_id):
                 continue
             self.services.instagram.mark_processed(message.message_id)
+            new_messages += 1
             future = self._executor.submit(self.handle_message, message)
             self._futures.append(future)
         # Reap finished futures so the list stays bounded.
         self._futures = [f for f in self._futures if not f.done()]
-        if messages:
-            # Mark the threads read so the next poll only sees new messages.
+        if messages and self.config.ig_mark_seen:
+            # Optional: mark threads read (each one is an extra request).
             for thread_id in {m.thread_id for m in messages}:
                 self.services.instagram.mark_thread_seen(thread_id)
+        return new_messages > 0
 
     def _maybe_relogin(self, exc: Exception) -> None:
         text = str(exc).lower()

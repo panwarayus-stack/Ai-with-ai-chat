@@ -291,6 +291,52 @@ form is always safe.
 
 ---
 
+## Anti-suspension: staying quiet on Instagram
+
+Automated accounts get flagged (or hit with "verify it's you" challenges) when
+they behave like a 24/7 robot. This bot is built to **come online only when
+somebody messages it**, and otherwise keep its request footprint as close to a
+quiet human as the Instagram private API allows.
+
+### What "only becomes online when someone replies" means in practice
+
+Instagram's private API has **no push channel** — the only way to notice a new
+DM is to ask. So the bot cannot literally sleep until pinged; instead it:
+
+- **Stays silent when nothing is happening.** No messages → no replies, no
+  likes, no follows, no posting, no profile actions. The bot never starts a
+  conversation.
+- **Slows down when the inbox is idle.** After `IG_IDLE_AFTER_MINUTES`
+  (default 10) without any new message, polling stretches to
+  `IG_IDLE_POLL_INTERVAL` (default 180 s). While people are active it polls at
+  `IG_POLL_INTERVAL` (default 60 s).
+- **Every poll interval is jittered** by ±15% so the request pattern never
+  looks metronomic.
+- **Waits before replying** a random `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`
+  seconds (default 3–10) — humans don't answer in 200 ms.
+
+### Request pacing and budgets
+
+- **`IG_MIN_REQUEST_GAP`** (default 5 s) is a hard floor between *any* two
+  Instagram API calls. Long conversations pace themselves out instead of
+  bursting.
+- **`IG_MAX_REPLIES_PER_HOUR`** (default 20) caps how much the bot will say
+  per hour. Past the budget it stays silent (logged as a warning) and the
+  window resets on its own.
+- **`IG_MARK_SEEN=false`** (default) skips "mark thread read" calls entirely —
+  each one is an extra request for little benefit.
+- **`IG_REPLY_IN_GROUPS=false`** (default) ignores group threads and replies
+  only in 1:1 DMs, cutting traffic sharply.
+- **Re-login protection:** `sessionid` cookies are persisted and reused
+  (see above); invalid credentials abort instead of retrying. Logins are the
+  single most suspicious request an automation makes.
+
+All of these are environment variables — tune them in the Voroa dashboard.
+If Instagram still challenges the account, raise `IG_MIN_REQUEST_GAP` and
+`IG_POLL_INTERVAL`, and lower `IG_MAX_REPLIES_PER_HOUR`. Non-command chatter
+is answered with nothing at all, so a chatty contact costs zero extra
+Instagram requests.
+
 ## Instagram integration & limitations
 
 * `instagrapi` is an **unofficial** private-API wrapper. Instagram can
@@ -367,6 +413,8 @@ Coverage includes (per the delivery checklist):
 | "configured AI model … is unavailable" | Free models rotate off. Pick a current `:free` slug at [openrouter.ai/models](https://openrouter.ai/models) and update `OPENROUTER_MODEL`. `openrouter/free` auto-routes across free models. |
 | Instagram challenge/checkpoint loop | Approve the login in the Instagram app on a trusted device. Set `IG_VERIFICATION_CODE` for 2FA. The bot will not bypass challenges. |
 | Instagram asks for a one-time code | Live (no restart): SSH → `python app.py --set-code 123456`. The bot waits up to `IG_VERIFICATION_WAIT` seconds (default 300) and uses the code automatically. Or set `IG_VERIFICATION_CODE` in the dashboard and restart. |
+| Instagram keeps asking to "verify it's you" | Too many requests for a human account. Raise `IG_POLL_INTERVAL`/`IG_MIN_REQUEST_GAP`, lower `IG_MAX_REPLIES_PER_HOUR`, keep `IG_MARK_SEEN=false`, `IG_REPLY_IN_GROUPS=false` — see [Anti-suspension](#anti-suspension-staying-quiet-on-instagram). |
+| Bot replies slower than expected | Working as designed (human-like `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`, request pacing). Only tune these down if the account is challenge-free. |
 | "Instagram rejected the verification code" | Codes expire quickly and are one-time. Get a fresh code and run `python app.py --set-code <code>` again. |
 | Session lost after every redeploy | Set `REDIS_URL` to a Voroa managed Key Value URL (see [session persistence](#session-persistence-important)). |
 | `/Gender` says "quota reached" | Genderize/Nationalize free quotas are small; add `GENDERIZE_API_KEY` / `NATIONALIZE_API_KEY` (one genderize.io key covers both) or retry later. |

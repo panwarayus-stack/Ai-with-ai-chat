@@ -16,7 +16,7 @@ TROUBLESHOOTING: List[Tuple[str, str, str]] = [
         "AI commands (/AI, /Gf)",
         "They need OPENROUTER_API_KEY in the bot environment. Without it the "
         "bot explains the problem instead of inventing an answer. Add a key at "
-        "openrouter.ai and set OPENROUTER_MODEL to a ':free' model to avoid charges.",
+        "openrouter.ai and set OPENROUTER_MODEL to a ':free' model (or 'openrouter/free') to avoid charges.",
     ),
     (
         "rate limit 429 too many requests slow queue busy",
