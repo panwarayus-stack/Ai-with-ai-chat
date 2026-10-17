@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import random
 import signal
 import sys
 import tempfile
@@ -45,6 +46,7 @@ class Application:
     def __init__(self, config: Config):
         self.config = config
         self.services = None  # populated by build()
+        self._reply_budget = None  # populated by build()
         self._stop = threading.Event()
         self._executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="cmd")
         self._futures: List = []
@@ -56,6 +58,7 @@ class Application:
         from src.commands.base import Services
         from src.lib.ai_queue import AIQueue
         from src.lib.http import HttpClient
+        from src.lib.utils import HourlyBudget
         from src.services.anime import AnimeService
         from src.services.demographics import DemographicsService
         from src.services.images import ImageService
@@ -115,6 +118,10 @@ class Application:
                 session_file=cfg.session_file_path(),
                 store=store,
                 verification_code=cfg.ig_verification_code,
+                verification_file=cfg.verification_file_path(),
+                verification_wait=cfg.ig_verification_wait,
+                min_request_gap=cfg.ig_min_request_gap,
+                reply_in_groups=cfg.ig_reply_in_groups,
             ),
             sherlock=SherlockService(
                 enabled=cfg.sherlock_enabled,
@@ -124,12 +131,18 @@ class Application:
             store=store,
         )
         load_all()  # populate the command registry
+        self._reply_budget = HourlyBudget(cfg.ig_max_replies_per_hour)
 
     # ------------------------------------------------------------------ #
     # Message handling
     # ------------------------------------------------------------------ #
     def handle_message(self, message) -> None:
-        """Dispatch one inbox message (runs on a worker thread)."""
+        """Dispatch one inbox message (runs on a worker thread).
+
+        Anti-suspension behaviour: nothing is sent until dispatch produced an
+        actual reply, replies are rate-limited per hour, and each reply waits
+        a random human-like pause before it is typed out.
+        """
         from src.commands.base import CommandContext, dispatch
 
         ctx = CommandContext(
@@ -144,16 +157,36 @@ class Application:
             logger.exception("Unhandled dispatch failure")
             return
         if result is None:
+            return  # not a command — stay silent, cost nothing
+
+        # Keep the account's activity footprint tiny and human-like.
+        if self._reply_budget is not None and not self._reply_budget.allow():
+            logger.warning(
+                "Reply budget reached (IG_MAX_REPLIES_PER_HOUR=%s) — staying quiet to "
+                "protect the account. The budget resets automatically.",
+                self.config.ig_max_replies_per_hour,
+            )
             return
+        self._human_delay()
 
         try:
             if result.image:
                 self._send_image_result(message.thread_id, result)
-            for chunk in result.message_chunks():
+            chunks = result.message_chunks()
+            for index, chunk in enumerate(chunks):
                 self.services.instagram.send_text(message.thread_id, chunk)
-                time.sleep(0.4)  # keep messages ordered and rate-limit friendly
+                if index < len(chunks) - 1:
+                    time.sleep(1.0)  # pause between chunks only
         except Exception as exc:
             logger.error("Failed to reply in thread %s: %s", message.thread_id, exc)
+
+    def _human_delay(self) -> None:
+        """Random pause before replying — humans don't answer instantly."""
+        low = self.config.ig_reply_delay_min
+        high = max(low, self.config.ig_reply_delay_max)
+        if high <= 0:
+            return
+        time.sleep(random.uniform(low, high))
 
     def _send_image_result(self, thread_id: int, result) -> None:
         suffix = _image_extension(result.image)
@@ -193,9 +226,12 @@ class Application:
         )
 
         failures = 0
+        last_activity = time.monotonic()
         while not self._stop.is_set():
             try:
-                self._poll_once()
+                active = self._poll_once()
+                if active:
+                    last_activity = time.monotonic()
                 failures = 0
             except Exception as exc:
                 failures += 1
@@ -204,24 +240,40 @@ class Application:
                 # Bounded exponential backoff, capped at 5 minutes.
                 backoff = min(300, 10 * (2 ** min(failures, 5)))
                 self._stop.wait(backoff)
-            self._stop.wait(self.config.ig_poll_interval)
+            self._stop.wait(self._poll_delay(last_activity))
 
         self.shutdown()
 
-    def _poll_once(self) -> None:
+    def _poll_delay(self, last_activity: float) -> float:
+        """Next poll interval: jittered, and slower while the inbox is idle.
+
+        The bot stays quiet when nobody is talking (it "comes online" only
+        around actual conversations), which keeps the request pattern far
+        from that of a busy automation.
+        """
+        cfg = self.config
+        idle = time.monotonic() - last_activity >= cfg.ig_idle_after_minutes * 60
+        base = cfg.ig_idle_poll_interval if idle else cfg.ig_poll_interval
+        return base * random.uniform(0.85, 1.15)
+
+    def _poll_once(self) -> bool:
+        """Fetch and dispatch new messages. True when something new arrived."""
         messages = self.services.instagram.fetch_unread(amount=self.config.ig_poll_amount)
+        new_messages = 0
         for message in messages:
             if self.services.instagram.is_processed(message.message_id):
                 continue
             self.services.instagram.mark_processed(message.message_id)
+            new_messages += 1
             future = self._executor.submit(self.handle_message, message)
             self._futures.append(future)
         # Reap finished futures so the list stays bounded.
         self._futures = [f for f in self._futures if not f.done()]
-        if messages:
-            # Mark the threads read so the next poll only sees new messages.
+        if messages and self.config.ig_mark_seen:
+            # Optional: mark threads read (each one is an extra request).
             for thread_id in {m.thread_id for m in messages}:
                 self.services.instagram.mark_thread_seen(thread_id)
+        return new_messages > 0
 
     def _maybe_relogin(self, exc: Exception) -> None:
         text = str(exc).lower()
@@ -289,6 +341,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Validate configuration and imports, then exit (no network, no login).",
     )
+    parser.add_argument(
+        "--set-credentials",
+        nargs="+",
+        metavar="USERNAME",
+        help=(
+            "Store Instagram credentials at runtime (works via SSH while the "
+            "bot waits). Usage: --set-credentials <username>  (password is "
+            "prompted securely)  or  --set-credentials <username> <password>."
+        ),
+    )
+    parser.add_argument(
+        "--set-code",
+        metavar="CODE",
+        help="Provide a live one-time verification code (2FA/OTP) without restarting.",
+    )
+    parser.add_argument(
+        "--clear-code",
+        action="store_true",
+        help="Remove a stored verification code.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -299,16 +371,20 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _setup_logging(config.log_level)
 
+    if args.set_credentials or args.set_code or args.clear_code:
+        return _run_live_config(config, args)
+
     if args.check:
         return _run_check(config)
 
     errors = config.validate_for_run()
     if errors:
+        # Missing configuration must NOT crash-loop the worker: the login
+        # flow waits for live credentials (dashboard env or SSH --set-credentials)
+        # so the service stays up and reachable. Only --check treats this as
+        # a hard failure.
         for err in errors:
-            logger.error("Config error: %s", err)
-        logger.error("Fix the environment variables above and restart (see .env.example).")
-        return 2
-
+            logger.warning("Config note: %s", err)
     for note in config.soft_warnings():
         logger.warning("Config note: %s", note)
     logger.info("Starting with configuration: %s", config.summary())
@@ -324,6 +400,72 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _run_live_config(config: Config, args) -> int:
+    """Live configuration commands (run via SSH while the bot is waiting).
+
+    * ``--set-credentials <username> [password]`` — store login credentials
+      (password prompted securely when omitted).
+    * ``--set-code <code>`` — deliver a one-time 2FA/verification code.
+    * ``--clear-code`` — remove a stored code.
+
+    Values go to the configured session store (files under ``auth/``, or
+    Redis when ``REDIS_URL`` is set) and the running bot picks them up on its
+    next poll — no restart needed. Never prints secrets back.
+    """
+    import getpass
+
+    from src.services.instagram import InstagramService
+    from src.services.session_store import build_session_store
+
+    store = build_session_store(config.redis_url, config.session_file_path().parent / "state")
+    service = InstagramService(
+        username=config.ig_username,
+        password=config.ig_password,
+        session_file=config.session_file_path(),
+        store=store,
+        verification_code=config.ig_verification_code,
+        verification_file=config.verification_file_path(),
+        verification_wait=config.ig_verification_wait,
+    )
+
+    try:
+        if args.set_credentials:
+            parts = args.set_credentials
+            if len(parts) == 1:
+                username = parts[0]
+                password = getpass.getpass("Instagram password (input hidden): ")
+            elif len(parts) == 2:
+                username, password = parts[0], parts[1]
+                print(
+                    "Note: a password passed on the command line may be saved in "
+                    "shell history. Prefer: python app.py --set-credentials <username>"
+                )
+            else:
+                print("Usage: python app.py --set-credentials <username> [password]", file=sys.stderr)
+                return 2
+            service.provide_credentials(username, password)
+            print(
+                f"Credentials stored for @{username.strip()}. The waiting bot will "
+                "continue its login automatically (no restart needed)."
+            )
+        if args.set_code:
+            service.provide_verification_code(args.set_code)
+            print(
+                "Verification code stored. The waiting bot will use it automatically "
+                "(codes are one-time and are cleared after login)."
+            )
+        if args.clear_code:
+            service.clear_verification_code()
+            print("Stored verification code cleared.")
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 2
+    except Exception as exc:  # pragma: no cover - store failures
+        print(f"Could not store the value: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def _run_check(config: Config) -> int:
     """`python app.py --check`: validate everything short of logging in."""
     ok = True
@@ -333,6 +475,11 @@ def _run_check(config: Config) -> int:
         ok = False
         for err in errors:
             print(f"[error] {err}")
+        print(
+            "[hint]  Missing credentials no longer stop the running bot: it waits "
+            "and can be configured live via SSH — python app.py --set-credentials "
+            "<username>  (password prompted) — or via the Voroa Environment tab."
+        )
     for note in config.soft_warnings():
         print(f"[note]  {note}")
 

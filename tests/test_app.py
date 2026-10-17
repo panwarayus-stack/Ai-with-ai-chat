@@ -52,14 +52,20 @@ def test_app_check_mode_reports_missing_credentials(monkeypatch, capsys):
     assert "IG_USERNAME" in captured.out
 
 
-def test_run_refuses_to_start_without_credentials(monkeypatch):
+def test_run_starts_and_waits_when_credentials_missing(monkeypatch):
+    """Missing credentials must NOT crash-loop the worker (Voroa deploy would
+    abort). The bot starts and waits for live credentials instead."""
     monkeypatch.delenv("IG_USERNAME", raising=False)
     monkeypatch.delenv("IG_PASSWORD", raising=False)
     monkeypatch.setenv("LOG_LEVEL", "ERROR")
 
     import app
 
-    assert app.main([]) == 2
+    reached = {}
+    monkeypatch.setattr(app.Application, "run", lambda self: reached.setdefault("run", True))
+    code = app.main([])
+    assert code == 0
+    assert reached.get("run"), "startup must proceed; login() waits for credentials"
 
 
 def test_application_build_wires_every_service(config):
