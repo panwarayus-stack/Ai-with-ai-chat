@@ -90,6 +90,7 @@ def test_application_starts_and_stops_health_server():
             "IG_USERNAME": "t",
             "IG_PASSWORD": "p",
             "HEALTH_PORT": str(free_port),
+            "WEB_ENABLED": "false",  # exercise the bare health-server path
             "IG_REPLY_DELAY_MIN": "0",
             "IG_REPLY_DELAY_MAX": "0",
             "IG_MIN_REQUEST_GAP": "0",

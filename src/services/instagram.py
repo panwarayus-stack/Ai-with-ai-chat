@@ -155,6 +155,15 @@ class InstagramService:
         username, password = self.resolve_credentials()
         return bool(username and password)
 
+    def _set_status(self, state: str, detail: str = "") -> None:
+        """Publish what the bot is waiting for (shown on the web dashboard)."""
+        try:
+            from src.lib.bot_state import publish_status
+
+            publish_status(self.store, state, detail)
+        except Exception:  # pragma: no cover - status is informational only
+            pass
+
     def _ensure_credentials(self, timeout: Optional[float] = None, poll: float = 2.0):
         """Return credentials, waiting for live ones when missing.
 
@@ -167,6 +176,7 @@ class InstagramService:
 
         deadline = None if timeout is None else time.monotonic() + timeout
         logger.error(_MISSING_CREDS_INSTRUCTIONS)
+        self._set_status("waiting_credentials", "no Instagram credentials yet — add them on the dashboard")
         last_reminder = time.monotonic()
         while True:
             time.sleep(poll)
@@ -217,6 +227,10 @@ class InstagramService:
         """Live code first, then the ``IG_VERIFICATION_CODE`` env value."""
         return self._live_code() or self.env_verification_code
 
+    def has_live_code(self) -> bool:
+        """True when a runtime-delivered one-time code is pending."""
+        return bool(self._live_code())
+
     def clear_verification_code(self) -> None:
         """Codes are one-time: remove live copies (env cannot be unset)."""
         self.store.delete(VERIFICATION_KEY)
@@ -229,6 +243,7 @@ class InstagramService:
     def await_verification_code(self, timeout: Optional[float], poll: float = 5.0) -> str:
         """Poll for a live code (file / store) until one arrives or *timeout*."""
         deadline = None if timeout is None else time.monotonic() + timeout
+        self._set_status("waiting_code", "Instagram wants a one-time code — enter it on the dashboard")
         while True:
             code = self._live_code()
             if code:
@@ -322,6 +337,7 @@ class InstagramService:
         self._persist_session()
         # A verification code is strictly one-time.
         self.clear_verification_code()
+        self._set_status("online", f"logged in as @{username}")
         logger.info("Instagram login OK for @%s", username)
 
     def _handle_two_factor(self, username: str, password: str, cause: Exception) -> None:

@@ -141,6 +141,14 @@ class Config:
     # Resolution: HEALTH_PORT > PORT (platform-managed) > 8080.
     # HEALTH_PORT=0 disables the endpoint entirely.
     health_port: int = 8080
+    # Web dashboard (manage the bot in a browser instead of the CLI).
+    # Served on the same port as the health endpoint. WEB_PASSWORD may be
+    # empty: the first visit then offers a one-time setup form that stores
+    # an admin password (hashed) in the session store.
+    web_enabled: bool = True
+    web_username: str = "admin"
+    web_password: str = ""
+    web_secret_key: str = ""
 
     # Instagram authentication
     ig_username: str = ""
@@ -256,6 +264,10 @@ class Config:
             app_env=_get_str(env, "APP_ENV", "production") or "production",
             log_level=(_get_str(env, "LOG_LEVEL", "INFO") or "INFO").upper(),
             health_port=_resolve_health_port(env, warnings),
+            web_enabled=_get_bool(env, "WEB_ENABLED", True, warnings),
+            web_username=_get_str(env, "WEB_USERNAME", "admin") or "admin",
+            web_password=_get_str(env, "WEB_PASSWORD"),
+            web_secret_key=_get_str(env, "WEB_SECRET_KEY"),
             ig_username=_get_str(env, "IG_USERNAME"),
             ig_password=_get_str(env, "IG_PASSWORD"),
             ig_session_file=_get_str(env, "IG_SESSION_FILE", DEFAULT_IG_SESSION_FILE)
@@ -388,6 +400,7 @@ class Config:
             "app_env": self.app_env,
             "log_level": self.log_level,
             "health_port": self.health_port,
+            "web_enabled": self.web_enabled,
             "ig_username": self.ig_username or "<unset>",
             "ig_session_file": str(self.session_file_path()),
             "session_backend": "redis" if self.redis_url else "file",

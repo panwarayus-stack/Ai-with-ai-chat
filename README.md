@@ -29,10 +29,12 @@ start command `python app.py`.
 5. [Configuration](#configuration)
 6. [Voroa deployment](#voroa-deployment)
 7. [Session persistence (important)](#session-persistence-important)
-8. [Instagram integration & limitations](#instagram-integration--limitations)
-9. [Security](#security)
-10. [Testing](#testing)
-11. [Troubleshooting](#troubleshooting)
+8. [Web dashboard](#web-dashboard)
+9. [Anti-suspension: staying quiet on Instagram](#anti-suspension-staying-quiet-on-instagram)
+10. [Instagram integration & limitations](#instagram-integration--limitations)
+11. [Security](#security)
+12. [Testing](#testing)
+13. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -306,6 +308,40 @@ checks the process).
 * DM the bot `/Help` from another account.
 
 ---
+
+## Web dashboard
+
+Managing the bot does not need the CLI: the same process serves a small
+**web dashboard** on the deploy port (the one the platform health-checks),
+so it is reachable at your service URL. Set `WEB_ENABLED=false` to turn it
+off (the bare health endpoint stays).
+
+### Pages
+
+* **Status** — what the bot is doing right now (`online`, `waiting_credentials`,
+  `waiting_code`, `backing_off` with the retry countdown), whether credentials
+  and a one-time code are set, and the effective gentle-mode values.
+* **Login & codes** — the GUI replacement for `--set-credentials` / `--set-code`:
+  enter the Instagram username/password and any 2FA code Instagram asks for.
+  Values go to the same live store the CLI uses, so the running bot picks them
+  up **without a restart** (leave the password blank to keep the current one).
+* **Settings** — gentle-mode knobs (poll intervals, reply delays, request gap,
+  replies/hour, mark-seen, group replies). Saved values apply on the bot's
+  next cycle.
+* **Logs** — the last 300 log lines, refreshing every 5 s.
+
+### First run & login
+
+1. Open the service URL. With no admin password configured, a **one-time setup
+   form** asks you to create one (stored hashed; `WEB_USERNAME`/`WEB_PASSWORD`
+   env vars can fix one instead).
+2. Log in with that account. Everything except the health probe and the
+   login/setup pages requires the session; POST forms carry CSRF tokens, and
+   repeated failed logins are throttled per client.
+3. Use **Login & codes** whenever Instagram asks for credentials or a code —
+   including from your phone while the bot waits.
+
+The SSH commands keep working exactly as before (useful as a fallback).
 
 ## Anti-suspension: staying quiet on Instagram
 

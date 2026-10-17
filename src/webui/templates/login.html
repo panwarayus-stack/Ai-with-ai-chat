@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Log in · Bot dashboard{% endblock %}
+{% block content %}
+<h1>Log in</h1>
+<p class="muted">This dashboard manages the bot and its credentials — only the admin may enter.</p>
+<form method="post" class="card">
+  <input type="hidden" name="csrf" value="{{ session.get('csrf', '') }}">
+  <input type="hidden" name="next" value="{{ request.args.get('next', '') }}">
+  <label>Username <input name="username" autocomplete="username" required></label>
+  <label>Password <input type="password" name="password" autocomplete="current-password" required></label>
+  <button type="submit">Log in</button>
+</form>
+{% endblock %}

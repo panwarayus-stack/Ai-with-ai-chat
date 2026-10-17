@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}First-run setup · Bot dashboard{% endblock %}
+{% block content %}
+<h1>Create the admin account</h1>
+<p class="muted">First run: choose the username and password that will protect this
+dashboard. Store them somewhere safe — they are saved hashed and cannot be shown again.</p>
+<form method="post" class="card">
+  <input type="hidden" name="csrf" value="{{ session.get('csrf', '') }}">
+  <label>Username <input name="username" autocomplete="username" required></label>
+  <label>Password (min 8 chars) <input type="password" name="password" autocomplete="new-password" required minlength="8"></label>
+  <label>Repeat password <input type="password" name="confirm" autocomplete="new-password" required minlength="8"></label>
+  <button type="submit">Create and continue</button>
+</form>
+{% endblock %}

@@ -37,6 +37,27 @@ def test_login_resilience_defaults_and_overrides():
     assert cfg.ig_rate_limit_cooldown_max == 3600
 
 
+def test_web_dashboard_defaults_and_overrides():
+    cfg = Config.from_env(environ={})
+    assert cfg.web_enabled is True
+    assert cfg.web_username == "admin"
+    assert cfg.web_password == ""
+    assert cfg.web_secret_key == ""
+
+    cfg = Config.from_env(
+        environ={
+            "WEB_ENABLED": "false",
+            "WEB_USERNAME": "operator",
+            "WEB_PASSWORD": "env-admin-pass",
+            "WEB_SECRET_KEY": "fixed-secret",
+        }
+    )
+    assert cfg.web_enabled is False
+    assert cfg.web_username == "operator"
+    assert cfg.web_password == "env-admin-pass"
+    assert cfg.web_secret_key == "fixed-secret"
+
+
 def test_openrouter_free_router_is_recognized_as_free():
     """'openrouter/free' (the Free Models Router) must not warn about charges."""
     cfg = Config.from_env(environ={"OPENROUTER_MODEL": "openrouter/free"})
