@@ -42,7 +42,7 @@ ADMIN_USERNAME_KEY = "web:admin_username"
 ADMIN_PASSWORD_KEY = "web:admin_password"  # pbkdf2 hash
 SECRET_KEY_KEY = "web:secret_key"
 
-PUBLIC_PATHS = {"/health", "/healthz", "/ping", "/login", "/setup"}
+PUBLIC_PATHS = {"/health", "/healthz", "/ping", "/login", "/setup", "/favicon.ico"}
 
 
 # ---------------------------------------------------------------------- #
@@ -147,6 +147,17 @@ def create_app(config, store, instagram) -> Flask:
         expected = session.get("csrf", "")
         return bool(expected) and hmac.compare_digest(token, expected)
 
+    def _ensure_csrf() -> None:
+        """One CSRF token per session.
+
+        Regenerating the token on every GET invalidates any form the user is
+        still filling in (a background fetch of the same page, or the favicon
+        bouncing through /login -> /setup, used to rotate it and the submit
+        then failed with 403). Keep it stable until login/logout.
+        """
+        if "csrf" not in session:
+            session["csrf"] = secrets.token_urlsafe(16)
+
     def _current_settings() -> dict:
         overrides = load_settings(store)
         merged = {}
@@ -161,6 +172,10 @@ def create_app(config, store, instagram) -> Flask:
     def health():
         return {"status": "ok"}
 
+    @app.get("/favicon.ico")
+    def favicon():
+        return ("", 204)  # keep browsers from bouncing through /login
+
     # ---- setup (first run) & login ---------------------------------- #
     @app.route("/setup", methods=["GET", "POST"])
     def setup():
@@ -169,22 +184,23 @@ def create_app(config, store, instagram) -> Flask:
         error = ""
         if request.method == "POST":
             if not _csrf_ok():
-                return ("Invalid CSRF token", 403)
-            username = (request.form.get("username") or "").strip()
-            password = request.form.get("password") or ""
-            confirm = request.form.get("confirm") or ""
-            if not username or not password:
-                error = "Username and password are required."
-            elif len(password) < 8:
-                error = "Password must be at least 8 characters."
-            elif password != confirm:
-                error = "Passwords do not match."
+                error = "Your form expired — please submit again."
             else:
-                store.set(ADMIN_USERNAME_KEY, username)
-                store.set(ADMIN_PASSWORD_KEY, generate_password_hash(password))
-                logger.info("Web dashboard admin account created for %s", username)
-                return redirect(url_for("login"))
-        session["csrf"] = secrets.token_urlsafe(16)
+                username = (request.form.get("username") or "").strip()
+                password = request.form.get("password") or ""
+                confirm = request.form.get("confirm") or ""
+                if not username or not password:
+                    error = "Username and password are required."
+                elif len(password) < 8:
+                    error = "Password must be at least 8 characters."
+                elif password != confirm:
+                    error = "Passwords do not match."
+                else:
+                    store.set(ADMIN_USERNAME_KEY, username)
+                    store.set(ADMIN_PASSWORD_KEY, generate_password_hash(password))
+                    logger.info("Web dashboard admin account created for %s", username)
+                    return redirect(url_for("login"))
+        _ensure_csrf()
         return render_template("setup.html", error=error)
 
     @app.route("/login", methods=["GET", "POST"])
@@ -194,22 +210,22 @@ def create_app(config, store, instagram) -> Flask:
         error = ""
         if request.method == "POST":
             if not _csrf_ok():
-                return ("Invalid CSRF token", 403)
-            ip = _client_ip()
-            wait = throttle.blocked_for(ip)
-            if wait > 0:
-                error = f"Too many attempts — try again in {int(wait) + 1} seconds."
-            elif _verify_admin(store, config, request.form.get("username", ""), request.form.get("password", "")):
-                throttle.reset(ip)
-                session.clear()
-                session["user"] = (request.form.get("username") or "").strip()
-                session["csrf"] = secrets.token_urlsafe(16)
-                return redirect(request.form.get("next") or url_for("status"))
+                error = "Your form expired — please submit again."
             else:
-                throttle.record_failure(ip)
-                error = "Wrong username or password."
-        if "csrf" not in session:
-            session["csrf"] = secrets.token_urlsafe(16)
+                ip = _client_ip()
+                wait = throttle.blocked_for(ip)
+                if wait > 0:
+                    error = f"Too many attempts — try again in {int(wait) + 1} seconds."
+                elif _verify_admin(store, config, request.form.get("username", ""), request.form.get("password", "")):
+                    throttle.reset(ip)
+                    session.clear()
+                    session["user"] = (request.form.get("username") or "").strip()
+                    session["csrf"] = secrets.token_urlsafe(16)
+                    return redirect(request.form.get("next") or url_for("status"))
+                else:
+                    throttle.record_failure(ip)
+                    error = "Wrong username or password."
+        _ensure_csrf()
         return render_template("login.html", error=error)
 
     @app.post("/logout")

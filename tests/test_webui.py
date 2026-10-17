@@ -213,6 +213,38 @@ def test_csrf_required_on_posts(client):
     assert response.status_code == 403
 
 
+def test_csrf_token_survives_extra_page_fetches(client, store):
+    """Regression: a second GET of the form page (favicon used to bounce
+    through /login -> /setup) must NOT rotate the token and invalidate the
+    form the user is filling in — that produced a 403 on submit."""
+    page = client.get("/setup").get_data(as_text=True)
+    first_token = _csrf(page)
+    # Background fetch(es) of the same page while the form is open:
+    client.get("/setup")
+    client.get("/setup")
+    response = client.post(
+        "/setup",
+        data={"csrf": first_token, "username": "boss", "password": "long-enough-pass", "confirm": "long-enough-pass"},
+    )
+    assert response.status_code == 302  # admin created
+    assert store.get("web:admin_password"), "admin password hash must be stored"
+
+
+def test_expired_csrf_rerenders_form_with_hint(client):
+    _setup_and_login(client)
+    response = client.post(
+        "/login",
+        data={"csrf": "stale-token", "username": ADMIN_USER, "password": ADMIN_PASS},
+    )
+    assert response.status_code == 200
+    assert "form expired" in response.get_data(as_text=True)
+
+
+def test_favicon_is_public_and_silent(client):
+    response = client.get("/favicon.ico")
+    assert response.status_code == 204
+
+
 # ---------------------------------------------------------------------- #
 # Settings & status & logs
 # ---------------------------------------------------------------------- #
