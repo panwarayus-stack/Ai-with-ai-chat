@@ -162,3 +162,24 @@ def test_no_hardcoded_secrets_in_source():
             if pattern.search(text):
                 offenders.append(f"{path}: {pattern.pattern}")
     assert not offenders, f"possible secrets found: {offenders}"
+
+
+def test_env_example_never_contains_real_secrets():
+    """Regression: a real Instagram password once leaked into .env.example.
+
+    That file is committed to a PUBLIC repository — secret-looking keys
+    (passwords, API keys, tokens) must always carry empty values there.
+    Real values belong only in the git-ignored .env or the Voroa dashboard.
+    """
+    text = (ROOT / ".env.example").read_text()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key_upper = key.strip().upper()
+        if any(word in key_upper for word in ("PASSWORD", "SECRET", "TOKEN", "API_KEY")):
+            assert value.strip() == "", (
+                f"{key.strip()} in .env.example must be empty — never commit real secrets "
+                "(and rotate anything that ever leaked)"
+            )

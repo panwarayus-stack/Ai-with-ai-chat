@@ -107,6 +107,28 @@ def _get_csv(env: Mapping[str, str], key: str) -> Tuple[str, ...]:
     return tuple(part.strip() for part in raw.split(",") if part.strip())
 
 
+def _resolve_health_port(env: Mapping[str, str], warnings: list) -> int:
+    """Health probe port: ``HEALTH_PORT`` > ``PORT`` (platform-managed) > 8080.
+
+    ``0`` disables the endpoint. Invalid values fall back to 8080 with a
+    warning rather than breaking the bot.
+    """
+    raw = _get_str(env, "HEALTH_PORT") or _get_str(env, "PORT")
+    if not raw:
+        return 8080
+    try:
+        port = int(raw)
+    except ValueError:
+        warnings.append(f"HEALTH_PORT/PORT={raw!r} is not a number; using 8080")
+        return 8080
+    if port == 0:
+        return 0
+    if not (1 <= port <= 65535):
+        warnings.append(f"HEALTH_PORT/PORT={port} is out of range 1-65535; using 8080")
+        return 8080
+    return port
+
+
 @dataclass(frozen=True)
 class Config:
     """Immutable, fully-parsed runtime configuration."""
@@ -114,6 +136,11 @@ class Config:
     # Application
     app_env: str = "production"
     log_level: str = "INFO"
+    # Platform health probe port. The bot serves HTTP 200 here so the deploy
+    # health check passes even while it waits out an Instagram rate limit.
+    # Resolution: HEALTH_PORT > PORT (platform-managed) > 8080.
+    # HEALTH_PORT=0 disables the endpoint entirely.
+    health_port: int = 8080
 
     # Instagram authentication
     ig_username: str = ""
@@ -225,6 +252,7 @@ class Config:
         return cls(
             app_env=_get_str(env, "APP_ENV", "production") or "production",
             log_level=(_get_str(env, "LOG_LEVEL", "INFO") or "INFO").upper(),
+            health_port=_resolve_health_port(env, warnings),
             ig_username=_get_str(env, "IG_USERNAME"),
             ig_password=_get_str(env, "IG_PASSWORD"),
             ig_session_file=_get_str(env, "IG_SESSION_FILE", DEFAULT_IG_SESSION_FILE)
@@ -353,6 +381,7 @@ class Config:
         return {
             "app_env": self.app_env,
             "log_level": self.log_level,
+            "health_port": self.health_port,
             "ig_username": self.ig_username or "<unset>",
             "ig_session_file": str(self.session_file_path()),
             "session_backend": "redis" if self.redis_url else "file",

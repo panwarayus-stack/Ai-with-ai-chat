@@ -270,6 +270,22 @@ Security notes: credentials and codes are never printed back or logged, and
 machines (the two-argument form can land in shell history); the prompted
 form is always safe.
 
+### Health check — the deploy will not go live without it
+
+Voroa probes your service over **HTTP** on its managed port before calling
+the deploy live ("Waiting for your service to be ready"). If nothing answers,
+you get **"Deploy aborted - your service did not pass its health check"** —
+even when the bot itself is fine.
+
+This project therefore serves a tiny always-200 HTTP endpoint on
+`HEALTH_PORT` (falls back to the platform-managed `$PORT`, then `8080`).
+Any path answers `{"status": "ok"}` — the probe only needs to see a live
+process. Health means *liveness*: the endpoint keeps answering 200 while
+the bot waits out an Instagram rate limit or for live credentials, because
+waiting is the correct behaviour, not an unhealthy state. Set
+`HEALTH_PORT=0` to disable the endpoint (e.g. on a platform that only
+checks the process).
+
 ### 5. Uptime expectations
 
 * A background worker runs continuously and is **not** idle-stopped (unlike
@@ -369,6 +385,13 @@ Instagram requests.
 
 ## Security
 
+* **Rotate your Instagram password if you ever saw it in this repository.**
+  An early revision of the public `.env.example` accidentally carried a real
+  password, and git history preserves old revisions. Removing it from the
+  current tree is not enough — change the password in the Instagram app
+  (and keep real secrets only in the git-ignored `.env` or the Voroa
+  dashboard). `tests/test_app.py` now fails the build if any password/API-key
+  slot in `.env.example` is ever non-empty again.
 * Secrets come only from environment variables. `.env`, `auth/`,
   `*.session`, `session*.json`, cookies and logs are git-ignored
   (enforced by `tests/test_app.py`).
@@ -423,6 +446,7 @@ Coverage includes (per the delivery checklist):
 | Instagram keeps asking to "verify it's you" | Too many requests for a human account. Raise `IG_POLL_INTERVAL`/`IG_MIN_REQUEST_GAP`, lower `IG_MAX_REPLIES_PER_HOUR`, keep `IG_MARK_SEEN=false`, `IG_REPLY_IN_GROUPS=false` — see [Anti-suspension](#anti-suspension-staying-quiet-on-instagram). |
 | `Rate limit exceeded` (code 1675004) or HTTP 429 at login | Instagram is throttling the login endpoint (usually after many repeated login attempts). The bot now **stays up** and retries every `IG_RATE_LIMIT_COOLDOWN` (default 20 min) instead of crash-looping. Do **not** keep redeploying — each restart is another login attempt. Wait 30–60 minutes, approve any pending "was this you?" prompt in the Instagram app on your phone, then let the bot retry on its own. |
 | Deploy aborted: "your service started and then exited repeatedly" | Fixed: a failed login no longer exits the process. Redeploy after merging this change; if the deploy still aborts, check the Logs tab for the last error before the exit. |
+| Deploy aborted: "your service did not pass its health check" | The platform probed the service over HTTP and nothing answered. Fixed: the bot serves a 200 endpoint on `HEALTH_PORT`/`$PORT` (see [Health check](#health-check--the-deploy-will-not-go-live-without-it)). Redeploy after merging. |
 | Bot replies slower than expected | Working as designed (human-like `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`, request pacing). Only tune these down if the account is challenge-free. |
 | "Instagram rejected the verification code" | Codes expire quickly and are one-time. Get a fresh code and run `python app.py --set-code <code>` again. |
 | Session lost after every redeploy | Set `REDIS_URL` to a Voroa managed Key Value URL (see [session persistence](#session-persistence-important)). |

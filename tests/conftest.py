@@ -342,6 +342,8 @@ def config() -> Config:
             "IG_REPLY_DELAY_MAX": "0",
             "IG_MIN_REQUEST_GAP": "0",
             "IG_MARK_SEEN": "false",
+            # Never bind ports during tests.
+            "HEALTH_PORT": "0",
         }
     )
 
