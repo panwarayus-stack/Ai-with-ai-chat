@@ -229,6 +229,33 @@ How this bot handles it:
   processed-message list are stored there and survive deploys and restarts.
   Files are still written as a write-through cache.
 
+### Prefer a locally generated session — no server-side login
+
+Logging in **from the server** is what gets login IPs throttled. Instead,
+generate the session on **your own machine** once and import it — the server
+then signs in with the session alone and never touches Instagram's login
+endpoint while the session lasts:
+
+```bash
+# 1. On YOUR machine (uses your local .env credentials, one login):
+python app.py --login-only
+# -> saves auth/ig_session.json
+
+# 2. On the server (paste the file contents in the dashboard instead, if you
+#    prefer): Login & codes -> Import session.  Or via SSH:
+python app.py --import-session /path/to/ig_session.json
+```
+
+* The dashboard **Login & codes → Session (preferred)** card is the GUI way:
+  paste the file contents and the running bot picks it up in seconds.
+* Instagram itself is the only authority on validity: the bot probes the
+  session with one light request and only falls back to a password login if
+  Instagram **explicitly rejects** it (a flaky check never triggers one).
+* When a session dies, import a fresh one — or store credentials as a
+  fallback. `python app.py --clear-session` removes a stored session.
+* Redeploy without Redis? Import the session again instead of letting the
+  server log in.
+
 ### Live configuration via SSH (credentials & OTP)
 
 You do **not** have to finish configuration before deploying. The bot is
@@ -250,6 +277,10 @@ python app.py --set-code 123456
 
 # Remove a stored code (codes are one-time and cleared after login anyway)
 python app.py --clear-code
+
+# Session tools — sign in without a server-side login (see above)
+python app.py --import-session /path/to/ig_session.json
+python app.py --clear-session
 ```
 
 How it works:
@@ -303,7 +334,8 @@ checks the process).
 ### 6. Verify the deployment
 
 * Build log: dependencies installed once (no "installed twice" warning).
-* Service log: `Instagram login OK for @…` then `Bot is running — polling
+* Service log: `Signed in with the stored Instagram session (no password
+  login)` (or `Instagram login OK for @…`), then `Bot is running — polling
   every 20s (commands: 16 active)`.
 * DM the bot `/Help` from another account.
 
@@ -322,6 +354,7 @@ off (the bare health endpoint stays).
   `waiting_code`, `backing_off` with the retry countdown), whether credentials
   and a one-time code are set, and the effective gentle-mode values.
 * **Login & codes** — the GUI replacement for `--set-credentials` / `--set-code`:
+  import a locally generated session (preferred — no server-side login), or
   enter the Instagram username/password and any 2FA code Instagram asks for.
   Values go to the same live store the CLI uses, so the running bot picks them
   up **without a restart** (leave the password blank to keep the current one).

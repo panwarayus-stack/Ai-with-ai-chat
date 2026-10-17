@@ -566,6 +566,26 @@ def main(argv: Optional[List[str]] = None) -> int:
         action="store_true",
         help="Remove a stored verification code.",
     )
+    parser.add_argument(
+        "--login-only",
+        action="store_true",
+        help=(
+            "Log in once, save the session to IG_SESSION_FILE, then exit. "
+            "Run this on YOUR machine to generate a session the server can "
+            "import (dashboard: Import session) — the server then never "
+            "performs a password login."
+        ),
+    )
+    parser.add_argument(
+        "--import-session",
+        metavar="PATH",
+        help="Import a session file produced by --login-only into the store.",
+    )
+    parser.add_argument(
+        "--clear-session",
+        action="store_true",
+        help="Remove the stored Instagram session.",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -576,7 +596,14 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     _setup_logging(config.log_level)
 
-    if args.set_credentials or args.set_code or args.clear_code:
+    if (
+        args.set_credentials
+        or args.set_code
+        or args.clear_code
+        or args.login_only
+        or args.import_session
+        or args.clear_session
+    ):
         return _run_live_config(config, args)
 
     if args.check:
@@ -612,6 +639,10 @@ def _run_live_config(config: Config, args) -> int:
       (password prompted securely when omitted).
     * ``--set-code <code>`` — deliver a one-time 2FA/verification code.
     * ``--clear-code`` — remove a stored code.
+    * ``--login-only`` — log in once and save the session (run locally to
+      generate one the server can import).
+    * ``--import-session <path>`` — import a session file into the store.
+    * ``--clear-session`` — remove the stored session.
 
     Values go to the configured session store (files under ``auth/``, or
     Redis when ``REDIS_URL`` is set) and the running bot picks them up on its
@@ -662,6 +693,39 @@ def _run_live_config(config: Config, args) -> int:
         if args.clear_code:
             service.clear_verification_code()
             print("Stored verification code cleared.")
+        if args.login_only:
+            if not service.has_credentials() and not service.has_session():
+                print(
+                    "No Instagram credentials or session found. Set IG_USERNAME/"
+                    "IG_PASSWORD (or run --set-credentials / --import-session) first.",
+                    file=sys.stderr,
+                )
+                return 2
+            try:
+                service.login()
+            except Exception as exc:
+                print(f"Login failed: {exc}", file=sys.stderr)
+                return 1
+            print(f"Session saved to: {config.session_file_path()}")
+            print(
+                "Import it on the server: dashboard -> Login & codes -> Import "
+                "session (paste the file contents), or SSH: python app.py "
+                "--import-session <path>. The server will then sign in without "
+                "a password login."
+            )
+        if args.import_session:
+            path = Path(args.import_session)
+            if not path.is_file():
+                print(f"Error: no such file: {path}", file=sys.stderr)
+                return 2
+            service.provide_session(path.read_text(encoding="utf-8"))
+            print(
+                "Session imported. The running bot will use it on its next "
+                "sign-in — no password login needed."
+            )
+        if args.clear_session:
+            service.clear_session()
+            print("Stored Instagram session cleared.")
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
         return 2
