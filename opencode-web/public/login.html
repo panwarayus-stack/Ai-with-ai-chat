@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>Sign in · OpenCode Web</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/login.js" defer></script>
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <div class="brand login-brand"><span class="brand-mark" aria-hidden="true">oc</span><span>opencode<span class="brand-suffix"> / web</span></span></div>
+    <p class="eyebrow">PRIVATE TERMINAL</p>
+    <h1>Sign in to your server</h1>
+    <p class="muted">Your OpenCode sessions keep running on this server, even when you leave.</p>
+    <form id="login-form">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required maxlength="64" autofocus>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="256">
+      <p id="login-error" class="form-error" role="alert" hidden></p>
+      <button class="button primary login-submit" type="submit">Sign in</button>
+    </form>
+    <p class="login-note">Credentials are configured on the server. Provider keys stay in OpenCode, never in this page.</p>
+  </main>
+</body>
+</html>
