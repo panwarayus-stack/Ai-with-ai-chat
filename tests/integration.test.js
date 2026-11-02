@@ -53,16 +53,22 @@ test('real OpenCode + tmux: auth, streaming, reconnect, web restart, stop', { ti
     ...process.env, WEB_PASSWORD: 'integration-password-123', WEB_USERNAME: 'owner',
     WORKSPACE_DIR: workspace, DATA_DIR: path.join(temp, 'data'), PORT: '0',
     PUBLIC_URL: '', COOKIE_SECURE: 'false', COOKIE_SAME_SITE: 'strict', FRAME_ANCESTORS: "'none'",
-    TMUX_BIN: process.env.TMUX_BIN || path.join(ROOT, '.tools/bin/tmux'),
+    TMUX_BIN: process.env.TMUX_BIN || '',
   });
   let instance = await start(config);
   let sessionId;
   try {
     assert.equal((await request(instance, '/api/sessions')).status, 401);
+    const loginPage = await fetch(instance.origin + '/index.html');
+    assert.equal(loginPage.status, 200);
+    assert.match(await loginPage.text(), /Sign in to your server/);
     assert.equal((await request(instance, '/api/login', { method: 'POST', body: { username: 'owner', password: 'wrong' } })).status, 401);
     const login = await request(instance, '/api/login', { method: 'POST', body: { username: 'owner', password: config.password } });
     assert.equal(login.status, 200);
     const cookie = login.cookie, csrf = login.body.csrf;
+    const appPage = await fetch(instance.origin + '/', { headers: { Cookie: cookie } });
+    assert.equal(appPage.status, 200);
+    assert.match(await appPage.text(), /id="terminal"/);
     assert.equal((await request(instance, '/api/sessions', { method: 'POST', cookie, body: { cwd: '../' } })).status, 403);
     assert.equal((await request(instance, '/api/sessions', { method: 'POST', cookie, csrf: 'wrong', body: { cwd: '.' } })).status, 403);
     const created = await request(instance, '/api/sessions', { method: 'POST', cookie, csrf, body: { name: 'Integration', cwd: '.' } });

@@ -1,505 +1,255 @@
-# Instagram Bot for Voroa
+# OpenCode Web
 
-A ready-to-deploy Instagram **direct-message command bot** written in Python.
-Users send slash commands (`/Weather Agra`, `/Anime Frieren`, `/AI what is a
-black hole?`) in DMs and the bot replies in the same thread with real data
-from public APIs — plus a small set of local entertainment commands.
+A small, authenticated browser terminal for the **real OpenCode CLI** running on your own server.
 
-The project is a **headless background process** (no web dashboard, no GUI,
-no Node.js). It is designed to run as a **Voroa Background Worker** with the
-start command `python app.py`.
+This is not a chatbot, not an API wrapper, and not a simulated terminal. The browser renders the actual OpenCode TUI with xterm.js. Node.js/Express/WebSockets/`node-pty` attach to a detached `tmux` pane, so closing the browser does not stop OpenCode.
 
-> **Status of this build (October 2026).** All 16 active commands are
-> implemented and covered by 115 automated tests (offline, mocked HTTP).
-> Provider endpoints, auth schemes, response shapes and rate limits were
-> verified against the providers' current documentation (see
-> [Provider verification](#provider-verification)). Live end-to-end calls
-> were **not** possible from the build sandbox (outbound network is
-> restricted) — the first real run happens on your Voroa worker with your
-> credentials.
+```text
+Android / PC browser
+  └─ xterm.js + multiline composer
+       └─ authenticated WebSocket
+            └─ Express + node-pty recorder
+                 └─ tmux pane
+                      └─ real OpenCode CLI
+```
 
----
+## What is included
 
-## Contents
+- OpenCode dark terminal-style interface, responsive for desktop and mobile.
+- Multiple named sessions in an authorized workspace.
+- Real-time terminal input/output, including OpenCode slash commands and permission prompts.
+- Reconnect with recent ANSI output replay.
+- Rotated terminal transcripts on disk.
+- Multiline prompt composer, per-session prompt history on the device, and mobile terminal keys.
+- Stop, restart, close, and transcript download controls.
+- Password authentication, HttpOnly cookie, CSRF checks, Origin checks, rate limits, and security headers.
+- systemd installer, with PM2 fallback/configuration.
+- OpenCode CLI pinned as a local npm dependency (`opencode-ai` 1.19.5 in this build).
+- No skills installed or changed, as requested.
 
-1. [Commands](#commands)
-2. [Project structure](#project-structure)
-3. [Provider verification](#provider-verification)
-4. [Local setup](#local-setup)
-5. [Configuration](#configuration)
-6. [Voroa deployment](#voroa-deployment)
-7. [Session persistence (important)](#session-persistence-important)
-8. [Web dashboard](#web-dashboard)
-9. [Anti-suspension: staying quiet on Instagram](#anti-suspension-staying-quiet-on-instagram)
-10. [Instagram integration & limitations](#instagram-integration--limitations)
-11. [Security](#security)
-12. [Testing](#testing)
-13. [Troubleshooting](#troubleshooting)
+## Important persistence semantics
 
----
-
-## Commands
-
-### Active (16)
-
-| Command | What it does | Data source |
-| --- | --- | --- |
-| `/Info` | Info about the account the bot is logged in as (only) | Instagram (instagrapi) |
-| `/Gender <name>` | Gender + likely nationality, with probabilities and sample counts | Genderize + Nationalize |
-| `/AI <question>` | General assistant (its own conversation memory) | OpenRouter |
-| `/Gf <message>` | "Aria" chat companion (separate memory & persona) | OpenRouter |
-| `/Sherlock <username>` | Public profile pages found for a username | Sherlock project |
-| `/Help <question>` | Command list, usage, troubleshooting (fully local) | local |
-| `/Weather <city>` | Current weather, feels-like, wind, 3-day forecast | Open-Meteo |
-| `/Anime <anime name>` | Synopsis, genres, episodes, characters, seasons vs related works, poster | AniList (Jikan fallback) |
-| `/Pic [male\|female\|random]` | SFW anime artwork + source URL (never explicit) | waifu.im + nekos.best |
-| `/Roast <name>` | Playful, good-natured roast | local templates |
-| `/Ship <name1> <name2>` | Deterministic entertainment-only compatibility score | local (hash) |
-| `/Truth` | Random truth question | local bank |
-| `/Dare` | Random safe dare (always optional) | local bank |
-| `/Quote` | Motivational / funny / anime quote with honest attribution | local bank |
-| `/Celeb <full name>` | Biography + public photo of a notable person | Wikipedia + Commons |
-| `/Wiki <search term>` | Article summary, key content, lead image, source link | Wikipedia + Commons |
-
-### Paused (2 — placeholders only)
-
-| Command | Status |
+| Event | Result |
 | --- | --- |
-| `/Num <number>` | **Paused.** Returns a clear notice, makes **no** network calls. TODO provider slot reserved in `src/commands/paused.py` (`PHONE_LOOKUP_API_KEY`). |
-| `/Id <username>` | **Paused.** Same rules (`INSTAGRAM_ID_API_KEY`). |
+| Close browser / lose network | OpenCode keeps running in tmux. Reconnect restores recent output. |
+| Restart the Node web service | OpenCode keeps running. The web service reattaches to existing tmux panes. |
+| Stop a session from the UI | OpenCode is asked to exit, then the pane is terminated after a grace period. Transcript is kept. |
+| Restart a stopped session | A new OpenCode TUI opens in the same directory. Use OpenCode `/sessions` to resume a native conversation. |
+| Reboot the VPS | Running processes cannot survive a reboot. systemd/PM2 restarts the web service; session metadata and transcripts remain. Stopped sessions can be restarted, and native OpenCode conversation history remains available through OpenCode. |
 
-Paused commands are **not** in the command registry, **not** in `/Help`, and
-no endpoints, keys or results are invented for them. Flipping
-`ENABLE_NUM_COMMAND` / `ENABLE_ID_COMMAND` does not fabricate a provider.
+The web service is kept running 24/7. Individual AI tasks are not automatically resubmitted after a reboot.
 
-Commands that are deliberately **not** implemented: `/Joke`, `/8ball`,
-`/Age`, `/Sticker`, `/Take`, `/Meme`, `/Emix`.
+## Requirements
 
----
+- Linux VPS with Node.js **22–24** and npm.
+- A non-root user with `sudo` for the installer.
+- `tmux`, `python3`, `make`, and `g++` (the Debian/Ubuntu installer installs missing packages).
+- Outbound access to your chosen AI provider. Provider credentials are configured in OpenCode, not in the website.
 
-## Project structure
+## Install on a Debian/Ubuntu VPS
 
-```
-app.py                  Entry point: login, inbox polling, dispatch, shutdown
-config.py               Environment configuration + validation (no secrets logged)
-requirements.txt        Runtime dependencies (Voroa installs this automatically)
-requirements-dev.txt    Test dependencies (pytest)
-.env.example            Every configuration variable, documented
-.gitignore              Keeps .env, sessions, credentials and logs out of git
-src/
-  commands/             Command handlers + registry (one module per topic)
-    paused.py           /Num and /Id disabled placeholders (TODO providers)
-  services/             Reusable API clients
-    openrouter.py       One shared client + per-mode conversation memory
-    demographics.py     Genderize + Nationalize (combined /Gender logic)
-    weather.py          Open-Meteo geocoding + forecast
-    anime.py            AniList GraphQL (primary) + Jikan (fallback)
-    images.py           waifu.im + nekos.best with content policy
-    wikipedia.py        Wikipedia search/summary + Commons attribution
-    instagram.py        instagrapi wrapper (DMs, account info, sessions)
-    sherlock.py         Sherlock engine wrapper (bounded site sweep)
-    session_store.py    File / Redis persistence (Voroa has no disks)
-  lib/
-    ai_queue.py         Shared bounded FIFO queue — one AI request at a time
-    http.py             Timeouts, retries, Retry-After, typed errors
-    validation.py       Command parsing + input validation
-    formatting.py       DM message chunking + text helpers
-    utils.py            Small shared helpers
-data/                   Quotes, truths, dares, roasts (JSON banks)
-tests/                  115 offline tests (commands, services, queue, config)
-```
-
----
-
-## Provider verification
-
-| Provider | Endpoints / auth | Verified | Notes |
-| --- | --- | --- | --- |
-| OpenRouter | `POST /api/v1/chat/completions`, Bearer key, optional `HTTP-Referer` / `X-OpenRouter-Title` | docs + integration tests | Free `:free` models exist and rotate; free tier ≈20 req/min. Configured model is just an env var. Never fakes answers. |
-| Genderize / Nationalize | `GET api.genderize.io/?name=`, `GET api.nationalize.io/?name=`, optional `apikey` | docs + integration tests | Anonymous access allowed on a small free quota (a key raises it). 429 = quota. Both keys optional. |
-| Open-Meteo | `geocoding-api.open-meteo.com/v1/search`, `api.open-meteo.com/v1/forecast` | docs + integration tests | Keyless. `timezone=auto` for local time. WMO weather codes mapped to text. |
-| AniList | `POST graphql.anilist.co`, keyless | docs + integration tests | ~90 req/min. `relationType` distinguishes real seasons (PREQUEL/SEQUEL) from spin-offs etc. No episode lists invented. |
-| Jikan | `GET api.jikan.moe/v4/anime` | docs + integration tests | Keyless, ~3 req/s / 60 req/min — used **only** as fallback. |
-| waifu.im | `GET api.waifu.im/images?IncludedTags=…&IsNsfw=False` | docs + integration tests | **API changed**: the old `/search` endpoint is gone; this uses the current `/images` API. SFW-only filter is mandatory; mild tags (e.g. `oppai`) mixed in at ~30%; explicit tags excluded. Male category does not exist → see nekos.best. |
-| nekos.best | `GET nekos.best/api/v2/husbando` (keyless, custom User-Agent required) | docs + integration tests | Documented alternative for **male** artwork and waifu.im fallback. Returns verifiable `anime_name` / artist / source. |
-| Wikipedia / Commons | action API + REST summary + Commons `imageinfo` | docs + integration tests | Custom `User-Agent` required by policy. Disambiguation handled; person detection is cue-based and honest ("not verified as a biography" when unsure). |
-| Sherlock | `sherlock-project` PyPI package v0.16 (installed & API verified locally) | package API verified | CLI + library both work on Python ≥3.9. Default sweep is a curated site subset (`SHERLOCK_SITES`) to stay friendly to small hosts. |
-| Instagram | `instagrapi` v3.x (PyPI; Python ≥3.10) | package API verified | Chosen over `dilame/instagram-private-api`, which is **TypeScript/Node.js** and would require a second runtime. Unofficial API — see limitations below. |
-| Voroa | docs: background worker, env vars, persistent disks | docs verified | **Persistent disks are not available on Voroa today** (their docs, Aug 2026) — see session persistence below. |
-
----
-
-## Local setup
-
-Requires **Python 3.10+** (verified on 3.11).
+Copy this repository's contents to the server, for example as `/opt/opencode-web`, owned by your service user:
 
 ```bash
-git clone <this repo> && cd <repo>
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements-dev.txt
-
-cp .env.example .env      # then fill in IG_USERNAME / IG_PASSWORD at minimum
-python app.py --check     # validates config + imports + command registry
-pytest                    # 115 tests, all offline
-python app.py             # start the bot
+sudo mkdir -p /opt/opencode-web
+sudo chown "$USER:$USER" /opt/opencode-web
+# Copy the repository files into /opt/opencode-web, then:
+cd /opt/opencode-web
+bash deploy/install.sh
 ```
 
-Use a **dedicated Instagram account** for the bot. On first run the bot logs
-in, saves the session, and starts polling its DM inbox every
-`IG_POLL_INTERVAL` seconds.
+The browser entrypoint is `index.html` at the project root. If a host reads `/app/applet/index.html`, deploy the repository contents directly into `/app/applet` and start the app with `npm start` (or the included service installer), not an unrelated `server.ts`.
 
----
+The installer verifies each important step:
+
+1. Prints OS, Node.js, and npm versions.
+2. Installs missing tmux/native-build packages.
+3. Runs `npm ci` to install the pinned OpenCode CLI, xterm.js, Express, ws, and node-pty.
+4. Generates a private `.env` with a random website password.
+5. Creates `~/opencode-workspace` and a conservative OpenCode outside-directory approval policy.
+6. Runs `npm run doctor`.
+7. Installs and enables systemd when available, otherwise starts PM2.
+8. Checks the HTTP health endpoint.
+
+The setup command prints the generated website username/password once. They are also stored in the server-side `.env` file. Do not commit or publish that file.
+
+### Manual setup
+
+```bash
+npm ci
+npm run setup
+npm run doctor
+npm start
+```
+
+`npm start` is foreground-only. Use systemd or PM2 for persistent operation.
+
+## First sign-in and provider setup
+
+1. Open the website over HTTPS and sign in with the generated website credentials.
+2. Create a session. The real OpenCode TUI opens in `~/opencode-workspace`.
+3. Connect a provider using OpenCode itself:
+   - In the TUI, use `/connect`; or
+   - Over SSH as the same service user: `./node_modules/.bin/opencode auth login`.
+4. Choose a model in OpenCode and start prompting.
+
+Provider credentials are stored by OpenCode in the service user's home directory. The web frontend never receives provider keys. The terminal environment is allowlisted; arbitrary server environment variables are not passed through. If you intentionally use environment-based provider credentials, add only the variable **names** to `TERMINAL_ENV_ALLOWLIST` in `.env`, then restart the web service.
+
+No OpenCode skills were installed. Existing skills/configuration are preserved. To add skills later, use OpenCode's normal `.opencode/skills/<name>/SKILL.md` layout in the workspace or global config directory.
+
+## Using the interface
+
+- **Terminal:** click the terminal and type exactly as in a local OpenCode terminal. Permission prompts, slash commands, and TUI shortcuts are handled by OpenCode.
+- **Composer:** Enter sends; Shift+Enter inserts a newline. Multiline text is bracketed-pasted into the same TUI. Up/Down recalls device-local prompt history.
+- **Sessions:** create, switch, stop, restart, or close from the sidebar/toolbar.
+- **Transcript:** the download button exports the retained ANSI terminal log. Treat transcripts as sensitive; they can contain prompts, file paths, and tool output.
+- **Mobile:** use the key row for Esc, Tab, Ctrl-C, and arrows. The composer is useful for longer prompts.
+
+Prompt history/drafts are stored in browser local/session storage per web session. Raw keystrokes are not separately logged by the web server; terminal output is logged as emitted by the TUI. Clear history on shared devices.
+
+## HTTPS and public access
+
+Do **not** expose the raw HTTP terminal port to the public internet. Password authentication does not encrypt traffic.
+
+Recommended: Caddy on the VPS, with the Node app bound to loopback.
+
+`/etc/caddy/Caddyfile`:
+
+```caddyfile
+code.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+```
+
+`.env` for that deployment:
+
+```dotenv
+HOST=127.0.0.1
+PORT=3000
+PUBLIC_URL=https://code.example.com
+COOKIE_SECURE=true
+COOKIE_SAME_SITE=strict
+TRUST_PROXY=1
+FRAME_ANCESTORS="'none'"
+```
+
+Restart the service after editing `.env`:
+
+```bash
+sudo systemctl restart opencode-web
+# or: npx pm2 restart opencode-web
+```
+
+Allow ports 80/443 in the firewall, not port 3000. Caddy obtains HTTPS certificates automatically. Nginx/Certbot or another trusted TLS reverse proxy also works; forward WebSocket upgrade headers and set `TRUST_PROXY` to the number of trusted proxy hops.
+
+Without a domain, use an SSH tunnel from a PC:
+
+```bash
+ssh -L 3000:127.0.0.1:3000 user@your-vps
+# then open http://127.0.0.1:3000
+```
+
+For Android, use a private VPN such as WireGuard/Tailscale or a proper HTTPS domain. Do not use plain HTTP over the public internet.
+
+## Service management
+
+### systemd (preferred)
+
+```bash
+sudo systemctl status opencode-web
+sudo systemctl restart opencode-web
+sudo systemctl stop opencode-web
+journalctl -u opencode-web -f
+```
+
+The unit uses `KillMode=process` so restarting the Node bridge does not kill detached tmux/OpenCode processes. It disables `PrivateTmp` so the tmux socket remains reachable across bridge restarts.
+
+### PM2
+
+```bash
+npx pm2 start ecosystem.config.cjs
+npx pm2 status
+npx pm2 restart opencode-web
+npx pm2 stop opencode-web
+npx pm2 logs opencode-web
+```
+
+For reboot persistence, run `npx pm2 startup`, execute the command it prints, then run `npx pm2 save`. The ecosystem config disables tree-kill so the web bridge can restart without killing tmux.
 
 ## Configuration
 
-Every variable lives in [`.env.example`](.env.example) with inline
-descriptions. Highlights:
+See `.env.example`. Important values:
 
-* **Required to run:** `IG_USERNAME`, `IG_PASSWORD`.
-* **Optional but recommended:** `OPENROUTER_API_KEY` (for `/AI`, `/Gf`),
-  `REDIS_URL` (session persistence on Voroa).
-* **Optional keys that raise provider quotas:** `GENDERIZE_API_KEY`,
-  `NATIONALIZE_API_KEY`.
-* **Everything else works keyless** (Open-Meteo, AniList, Jikan, waifu.im,
-  nekos.best, Wikipedia, Sherlock).
+| Variable | Purpose |
+| --- | --- |
+| `WEB_USERNAME`, `WEB_PASSWORD` | Website sign-in. Password must be 16–256 characters. |
+| `WORKSPACE_DIR` | Authorized workspace root. New sessions can start only in existing real subdirectories. |
+| `PUBLIC_URL` | Exact public HTTPS origin; used for Origin validation. |
+| `COOKIE_SECURE`, `COOKIE_SAME_SITE` | Use `true`/`strict` behind HTTPS. `none` requires Secure. |
+| `TRUST_PROXY` | Trusted reverse-proxy hop count; `0` when directly exposed. |
+| `MAX_SESSIONS` | Maximum web sessions (default 8). |
+| `REPLAY_BUFFER_BYTES` | Recent output replayed on reconnect (default 2 MiB). |
+| `LOG_FILE_BYTES` | Size of each of two rotated transcript files per session (default 16 MiB). |
+| `OPENCODE_BIN`, `TMUX_BIN` | Optional explicit executable paths. |
+| `TERMINAL_ENV_ALLOWLIST` | Optional provider/environment variable names passed to OpenCode. |
 
-Missing optional keys never crash the bot: the affected command answers with
-a clear configuration message and nothing is faked.
+Website login sessions are in memory and expire after 12 hours by default. Restarting the web service signs browsers out, but does not stop tmux/OpenCode sessions.
 
----
+## Security model and limits
 
-## Voroa deployment
+- Single-owner password authentication; this is not a multi-tenant platform.
+- HttpOnly, SameSite cookie; CSRF token for mutations and WebSocket attach; strict Origin validation.
+- Login/API rate limits and WebSocket input size/rate limits.
+- Session working directories are resolved with `realpath`; traversal and symlink escapes outside `WORKSPACE_DIR` are rejected.
+- The generated workspace OpenCode policy asks before outside-directory access. This is an approval guard, **not an OS sandbox**. OpenCode can still act with the permissions of the service user.
+- Run as a dedicated non-root Unix user. Keep secrets and unrelated projects out of that user's reach. Do not grant that user passwordless sudo.
+- Terminal transcripts and session metadata are stored under `DATA_DIR` with private permissions. Protect backups of that directory and OpenCode's auth storage.
+- Multiple browsers can view the same terminal; the most recent resize wins. Anyone signed in can control all sessions.
 
-The bot is a long-running process with **no web port** — deploy it as a
-Voroa **Background Worker** ([Voroa docs: background workers](https://getvoroa.com/docs/deploy-background-worker/)).
+## Project layout
 
-### 1. Push the project to GitHub
-
-This repository is the deployable project. Push it (branch of your choice).
-
-### 2. Create the service
-
-1. Voroa dashboard → **New** → **Background Worker**.
-2. Pick the repository and branch.
-3. Root directory: `/` (project root).
-4. **Start command:** `python app.py`
-5. **Build command:** leave **empty**. Voroa detects `requirements.txt` and
-   installs dependencies automatically — adding `pip install` in the build
-   step only duplicates the install (their docs explicitly warn against it).
-6. Instance: the free instance is fine to start (the bot polls and waits).
-
-### 3. Set environment variables
-
-In the service's **Environment** tab, add at least:
-
-```
-IG_USERNAME=your_bot_username
-IG_PASSWORD=your_bot_password
-OPENROUTER_API_KEY=sk-or-...        (optional, enables /AI and /Gf)
-OPENROUTER_MODEL=meta-llama/llama-3.3-70b-instruct:free
-REDIS_URL=                          (paste your managed Key Value URL — see below)
-WIKIPEDIA_USER_AGENT=InstagramBot/1.0 (https://your.domain; you@example.com)
+```text
+.
+├── index.html             browser terminal entrypoint (project root)
+├── server.js              Express, auth routes, WebSocket upgrade
+├── sessions.js            tmux session lifecycle and metadata
+├── terminal.js            node-pty bridge, replay buffer, transcript rotation
+├── auth.js                password/cookie/CSRF/Origin checks
+├── config.js              environment and workspace validation
+├── ecosystem.config.cjs   PM2 configuration
+├── .env.example
+├── public/                app.js, login page, mobile-friendly CSS
+├── scripts/               setup, doctor, systemd installer
+├── deploy/                VPS installer and systemd unit template
+└── tests/                 unit + real OpenCode/tmux integration tests
 ```
 
-Voroa encrypts service environment variables and does not echo them back.
-Copy the rest from `.env.example` as needed.
-
-**No time to set them now? Deploy first, configure later.** If
-`IG_USERNAME`/`IG_PASSWORD` are missing the worker no longer crash-loops: it
-starts, logs what is missing, and **waits** — staying up and SSH-reachable —
-until you provide them live (see
-[Live configuration via SSH](#live-configuration-via-ssh)). The same is true
-for one-time 2FA codes.
-
-### 4. Session persistence — read before first deploy
-
-**Voroa has no persistent disks today** (their docs: "Persistent disks are
-not available on Voroa today… treat your service's filesystem as temporary").
-A redeploy wipes everything the process wrote to disk, including the
-Instagram login session.
-
-How this bot handles it:
-
-* **Without `REDIS_URL`:** the session is cached in local files
-  (`auth/…` and `auth/state/…`). It survives process restarts *within one
-  deploy*, but **every redeploy forces a fresh Instagram login** (the bot
-  logs in again automatically using `IG_USERNAME`/`IG_PASSWORD`).
-* **With `REDIS_URL` (recommended):** set it to a Voroa managed **Key Value
-  (Redis)** URL (the free plan includes one database). The session and the
-  processed-message list are stored there and survive deploys and restarts.
-  Files are still written as a write-through cache.
-
-### Live configuration via SSH (credentials & OTP)
-
-You do **not** have to finish configuration before deploying. The bot is
-built for "configure later":
-
-1. Deploy even with the environment still empty. The worker starts, logs what
-   is missing, and **waits** (no crash-loop, no Instagram calls while
-   waiting). Voroa shows it as running and SSH stays available.
-2. Open a terminal: Voroa dashboard → your service → **SSH**.
-3. Provide values live — the waiting bot picks them up within seconds, no
-   restart needed:
+## Verification
 
 ```bash
-# Instagram login (password is prompted with hidden input)
-python app.py --set-credentials your_bot_username
-
-# One-time 2FA / verification code, when Instagram asks for one
-python app.py --set-code 123456
-
-# Remove a stored code (codes are one-time and cleared after login anyway)
-python app.py --clear-code
+npm run doctor
+npm test
 ```
 
-How it works:
+The integration test starts the real OpenCode CLI in tmux and checks authentication, streaming output, browser reconnect, web-service restart with the same OpenCode PID, stop/restart, and cleanup. It does not send an AI prompt or require provider credentials.
 
-* Values are written to the session store — files under `auth/` (git-ignored,
-  chmod 600) or Redis when `REDIS_URL` is set. With Redis they even survive
-  redeploys.
-* Live values take priority over dashboard env vars, so you can override a
-  stale `IG_VERIFICATION_CODE` or a wrong password without touching the
-  dashboard.
-* For OTP you can also just write the file directly:
-  `echo 123456 > auth/verification_code.txt` — the bot polls
-  `IG_VERIFICATION_FILE` during login for up to `IG_VERIFICATION_WAIT`
-  seconds (default 300).
-* The dashboard **Environment** tab still works exactly as before — use
-  whichever is faster. Env vars win only when no live value is present.
-
-Security notes: credentials and codes are never printed back or logged, and
-`auth/` is excluded from git. Avoid `--set-credentials user pass` on shared
-machines (the two-argument form can land in shell history); the prompted
-form is always safe.
-
-### Health check — the deploy will not go live without it
-
-Voroa probes your service over **HTTP** on its managed port before calling
-the deploy live ("Waiting for your service to be ready"). If nothing answers,
-you get **"Deploy aborted - your service did not pass its health check"** —
-even when the bot itself is fine.
-
-This project therefore serves a tiny always-200 HTTP endpoint on
-`HEALTH_PORT` (falls back to the platform-managed `$PORT`, then `8080`).
-Any path answers `{"status": "ok"}` — the probe only needs to see a live
-process. Health means *liveness*: the endpoint keeps answering 200 while
-the bot waits out an Instagram rate limit or for live credentials, because
-waiting is the correct behaviour, not an unhealthy state. Set
-`HEALTH_PORT=0` to disable the endpoint (e.g. on a platform that only
-checks the process).
-
-### 5. Uptime expectations
-
-* A background worker runs continuously and is **not** idle-stopped (unlike
-  free web services), but on the **free plan** the workspace has a shared
-  monthly pool of running hours (750/month across free services). If those
-  hours run out, the worker stops until the next cycle. **Do not assume 24/7
-  uptime on the free plan**; a paid instance runs continuously.
-* Voroa restarts the worker if it exits. This bot catches command errors and
-  backs off on network failures instead of exiting, so crash-loops should not
-  happen. If the start command itself is wrong, the deploy shows "Failed to
-  start" in the dashboard.
-
-### 6. Verify the deployment
-
-* Build log: dependencies installed once (no "installed twice" warning).
-* Service log: `Instagram login OK for @…` then `Bot is running — polling
-  every 20s (commands: 16 active)`.
-* DM the bot `/Help` from another account.
-
----
-
-## Web dashboard
-
-Managing the bot does not need the CLI: the same process serves a small
-**web dashboard** on the deploy port (the one the platform health-checks),
-so it is reachable at your service URL. Set `WEB_ENABLED=false` to turn it
-off (the bare health endpoint stays).
-
-### Pages
-
-* **Status** — what the bot is doing right now (`online`, `waiting_credentials`,
-  `waiting_code`, `backing_off` with the retry countdown), whether credentials
-  and a one-time code are set, and the effective gentle-mode values.
-* **Login & codes** — the GUI replacement for `--set-credentials` / `--set-code`:
-  enter the Instagram username/password and any 2FA code Instagram asks for.
-  Values go to the same live store the CLI uses, so the running bot picks them
-  up **without a restart** (leave the password blank to keep the current one).
-* **Settings** — gentle-mode knobs (poll intervals, reply delays, request gap,
-  replies/hour, mark-seen, group replies). Saved values apply on the bot's
-  next cycle.
-* **Logs** — the last 300 log lines, refreshing every 5 s.
-
-### First run & login
-
-1. Open the service URL. With no admin password configured, a **one-time setup
-   form** asks you to create one (stored hashed; `WEB_USERNAME`/`WEB_PASSWORD`
-   env vars can fix one instead).
-2. Log in with that account. Everything except the health probe and the
-   login/setup pages requires the session; POST forms carry CSRF tokens, and
-   repeated failed logins are throttled per client.
-3. Use **Login & codes** whenever Instagram asks for credentials or a code —
-   including from your phone while the bot waits.
-
-The SSH commands keep working exactly as before (useful as a fallback).
-
-## Anti-suspension: staying quiet on Instagram
-
-Automated accounts get flagged (or hit with "verify it's you" challenges) when
-they behave like a 24/7 robot. This bot is built to **come online only when
-somebody messages it**, and otherwise keep its request footprint as close to a
-quiet human as the Instagram private API allows.
-
-### What "only becomes online when someone replies" means in practice
-
-Instagram's private API has **no push channel** — the only way to notice a new
-DM is to ask. So the bot cannot literally sleep until pinged; instead it:
-
-- **Stays silent when nothing is happening.** No messages → no replies, no
-  likes, no follows, no posting, no profile actions. The bot never starts a
-  conversation.
-- **Slows down when the inbox is idle.** After `IG_IDLE_AFTER_MINUTES`
-  (default 10) without any new message, polling stretches to
-  `IG_IDLE_POLL_INTERVAL` (default 180 s). While people are active it polls at
-  `IG_POLL_INTERVAL` (default 60 s).
-- **Every poll interval is jittered** by ±15% so the request pattern never
-  looks metronomic.
-- **Waits before replying** a random `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`
-  seconds (default 3–10) — humans don't answer in 200 ms.
-
-### Request pacing and budgets
-
-- **`IG_MIN_REQUEST_GAP`** (default 5 s) is a hard floor between *any* two
-  Instagram API calls. Long conversations pace themselves out instead of
-  bursting.
-- **`IG_MAX_REPLIES_PER_HOUR`** (default 20) caps how much the bot will say
-  per hour. Past the budget it stays silent (logged as a warning) and the
-  window resets on its own.
-- **`IG_MARK_SEEN=false`** (default) skips "mark thread read" calls entirely —
-  each one is an extra request for little benefit.
-- **`IG_REPLY_IN_GROUPS=false`** (default) ignores group threads and replies
-  only in 1:1 DMs, cutting traffic sharply.
-- **Re-login protection:** `sessionid` cookies are persisted and reused
-  (see above); invalid credentials abort instead of retrying. Logins are the
-  single most suspicious request an automation makes.
-- **Failed logins never crash-loop.** If Instagram refuses a login (rate
-  limit, challenge, wrong password), the process *stays up* and retries
-  slowly — `IG_LOGIN_RETRY_MIN` doubling to `IG_LOGIN_RETRY_MAX` (60 s →
-  30 min), and only every `IG_RATE_LIMIT_COOLDOWN` (20 min) for rate limits
-  and challenges. Persistent throttling backs off further each consecutive
-  failure (doubling up to `IG_RATE_LIMIT_COOLDOWN_MAX`, default 2 h) —
-  retrying a throttle too often is what keeps it active. A crash-loop
-  restarts the bot every ~30 s and hammers the login endpoint; that is
-  precisely what keeps "Rate limit exceeded" and "verify it's you" active.
-
-All of these are environment variables — tune them in the Voroa dashboard.
-If Instagram still challenges the account, raise `IG_MIN_REQUEST_GAP` and
-`IG_POLL_INTERVAL`, and lower `IG_MAX_REPLIES_PER_HOUR`. Non-command chatter
-is answered with nothing at all, so a chatty contact costs zero extra
-Instagram requests.
-
-## Instagram integration & limitations
-
-* `instagrapi` is an **unofficial** private-API wrapper. Instagram can
-  rate-limit, challenge (checkpoint) or restrict automated accounts at any
-  time. Use a secondary account and moderate volume.
-* The bot **does not bypass CAPTCHAs or authentication challenges**. If
-  Instagram raises one: approve the login in the Instagram app on a trusted
-  device, then restart the bot. For 2FA accounts deliver the one-time code
-  live (`python app.py --set-code <code>` via SSH) or set
-  `IG_VERIFICATION_CODE` — the bot waits for it during login.
-* Expired sessions are detected (`ClientLoginRequired`) and refreshed
-  automatically from stored settings or a fresh login.
-* The reference library in the original brief
-  ([`dilame/instagram-private-api`](https://github.com/dilame/instagram-private-api))
-  is TypeScript/Node.js. Since the brief mandates Python-only hosting,
-  `instagrapi` (PyPI, actively versioned, Python ≥3.10) is the compatible
-  Python solution — its DM, session and account APIs were verified against
-  the installed package.
-* `/Info` shows **only** the authenticated account. Session settings,
-  cookies, passwords and tokens are never logged or sent to users.
-
----
-
-## Security
-
-* **Rotate your Instagram password if you ever saw it in this repository.**
-  An early revision of the public `.env.example` accidentally carried a real
-  password, and git history preserves old revisions. Removing it from the
-  current tree is not enough — change the password in the Instagram app
-  (and keep real secrets only in the git-ignored `.env` or the Voroa
-  dashboard). `tests/test_app.py` now fails the build if any password/API-key
-  slot in `.env.example` is ever non-empty again.
-* Secrets come only from environment variables. `.env`, `auth/`,
-  `*.session`, `session*.json`, cookies and logs are git-ignored
-  (enforced by `tests/test_app.py`).
-* No credentials are embedded in source. The config `summary()` log line is
-  redacted.
-* All HTTP calls have timeouts, bounded retries and rate-limit handling
-  (`src/lib/http.py`); the AI queue is bounded; conversation memory is
-  bounded; processed message IDs are bounded and persisted.
-* User input is validated and URL parameters are encoded by the HTTP layer.
-* A failed command replies with a friendly error and can never crash the
-  polling loop.
-* Note on repository history: earlier revisions of this repository contained
-  a hard-coded Gemini API key in a now-removed web front-end file. **Rotate
-  that key** if it was ever real — it remains in git history.
-
----
-
-## Testing
+On the VPS also verify:
 
 ```bash
-pip install -r requirements-dev.txt
-pytest            # 115 tests, no network access required
+sudo systemctl is-enabled opencode-web
+sudo systemctl is-active opencode-web
+curl -fsS http://127.0.0.1:3000/api/health
 ```
 
-Coverage includes (per the delivery checklist):
-
-1. All 16 active commands registered and callable.
-2. `/Num` and `/Id` present only as disabled placeholders (not in registry or
-   help, no network calls).
-3. `/Gender` combines both providers, applies the 5-percentage-point rule and
-   survives partial failures.
-4. `/AI` and `/Gf` share one FIFO queue with exactly one active request, and
-   keep separate prompts/memories; errors are never faked.
-5. Wikipedia and anime replies are built strictly from provider payloads
-   (titles, URLs, extracts asserted against canned real-shaped responses).
-6. Every module imports cleanly.
-7. `python app.py --check` passes (the same start-path wiring Voroa uses).
-8. Secrets and session files are excluded from version control.
-
----
+Then test from a browser: create a session, disconnect/reconnect, restart the web service, and confirm the session is still running. Finally reboot the VPS and confirm the web service returns and transcripts/session history remain.
 
 ## Troubleshooting
 
-| Symptom | Fix |
-| --- | --- |
-| `IG_USERNAME is required` in the log | The bot is **waiting**, not dead. Two fixes: (a) Voroa dashboard → Environment → set `IG_USERNAME` / `IG_PASSWORD` → Restart, or (b) live via SSH: `python app.py --set-credentials your_bot_username` (password prompted). |
-| `/AI` answers "not configured" | Add `OPENROUTER_API_KEY`. The bot refuses to fake answers. |
-| "OpenRouter rate limit reached" | Free tier ≈20 req/min. Wait a moment; the shared queue serialises requests. |
-| "configured AI model … is unavailable" | Free models rotate off. Pick a current `:free` slug at [openrouter.ai/models](https://openrouter.ai/models) and update `OPENROUTER_MODEL`. `openrouter/free` auto-routes across free models. |
-| Instagram challenge/checkpoint loop | Approve the login in the Instagram app on a trusted device. Set `IG_VERIFICATION_CODE` for 2FA. The bot will not bypass challenges. |
-| Instagram asks for a one-time code | Live (no restart): SSH → `python app.py --set-code 123456`. The bot waits up to `IG_VERIFICATION_WAIT` seconds (default 300) and uses the code automatically. Or set `IG_VERIFICATION_CODE` in the dashboard and restart. |
-| Instagram keeps asking to "verify it's you" | Too many requests for a human account. Raise `IG_POLL_INTERVAL`/`IG_MIN_REQUEST_GAP`, lower `IG_MAX_REPLIES_PER_HOUR`, keep `IG_MARK_SEEN=false`, `IG_REPLY_IN_GROUPS=false` — see [Anti-suspension](#anti-suspension-staying-quiet-on-instagram). |
-| `Rate limit exceeded` (code 1675004) or HTTP 429 at login | Instagram is throttling the login endpoint (usually after many repeated login attempts). The bot now **stays up** and retries every `IG_RATE_LIMIT_COOLDOWN` (default 20 min), doubling each consecutive failure up to `IG_RATE_LIMIT_COOLDOWN_MAX` (default 2 h). Do **not** keep redeploying — each restart is another login attempt. Wait it out (can take hours), approve any pending "was this you?" prompt in the Instagram app on your phone, then let the bot retry on its own. |
-| Deploy aborted: "your service started and then exited repeatedly" | Fixed: a failed login no longer exits the process. Redeploy after merging this change; if the deploy still aborts, check the Logs tab for the last error before the exit. |
-| Deploy aborted: "your service did not pass its health check" | The platform probed the service over HTTP and nothing answered. Fixed: the bot serves a 200 endpoint on `HEALTH_PORT`/`$PORT` (see [Health check](#health-check--the-deploy-will-not-go-live-without-it)). Redeploy after merging. |
-| Bot replies slower than expected | Working as designed (human-like `IG_REPLY_DELAY_MIN`–`IG_REPLY_DELAY_MAX`, request pacing). Only tune these down if the account is challenge-free. |
-| "Instagram rejected the verification code" | Codes expire quickly and are one-time. Get a fresh code and run `python app.py --set-code <code>` again. |
-| Session lost after every redeploy | Set `REDIS_URL` to a Voroa managed Key Value URL (see [session persistence](#session-persistence-important)). |
-| `/Gender` says "quota reached" | Genderize/Nationalize free quotas are small; add `GENDERIZE_API_KEY` / `NATIONALIZE_API_KEY` (one genderize.io key covers both) or retry later. |
-| `/Weather` can't find the city | Use `City, Country` (e.g. `Agra, India`). |
-| `/Anime` returns "Other matches" | Re-send with the exact title shown. The bot never guesses a watch order. |
-| `/Pic` returns an error | Both image providers were unreachable or refused the content filter — the message says which. Try again later. |
-| `/Sherlock` is slow or times out | Each checked site gets a real network timeout. Narrow `SHERLOCK_SITES` (e.g. `GitHub,Twitter,Instagram`) or raise `SHERLOCK_TIMEOUT`. |
-| Worker restarts in a loop | Check the Voroa deploy log: the start command must be exactly `python app.py` and `requirements.txt` must install. |
-
----
-
-## License / usage notes
-
-Follow each provider's terms of service, the Wikimedia user-agent policy,
-Instagram's automation rules, and applicable privacy law. `/Ship`,
-`/Gender`, `/Roast` and similar outputs are entertainment only and are
-labelled as such in the replies.
+- **`ENOENT ... index.html`:** start this project from its root (`npm start`). The entrypoint is `./index.html`; do not run an unrelated generated `server.ts` that expects a different layout.
+- **`node-pty` build fails:** install `python3 make g++` and Node headers. On restricted networks, point `npm_config_nodedir` at a local Node installation containing `include/node`.
+- **`tmux` missing:** `sudo apt-get install tmux`.
+- **Login says Origin not allowed:** set `PUBLIC_URL` to the exact browser origin and configure `TRUST_PROXY` for your reverse proxy.
+- **Blank terminal after create:** wait for OpenCode startup, then press Enter or resize. Check `journalctl -u opencode-web -f` and OpenCode logs under the service user's `~/.local/share/opencode/log`.
+- **No model/provider:** run OpenCode `/connect` or `opencode auth login` as the service user.
+- **Session stopped after reboot:** expected. Restart it from the UI and use OpenCode `/sessions` to resume the native conversation.
+- **Disk usage:** transcripts are bounded to two rotated files per session, but native OpenCode history/snapshots are managed by OpenCode. Monitor the service user's data directory.
