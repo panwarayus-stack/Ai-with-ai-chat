@@ -1,0 +1,27 @@
+[Unit]
+Description=OpenCode Web terminal bridge
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__GROUP__
+WorkingDirectory=__DIR__
+ExecStart=__NODE__ __DIR__/server.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+# Only stop the Node bridge. The detached tmux server and OpenCode panes survive
+# web-service restarts. PrivateTmp would hide the tmux socket after a restart.
+KillMode=process
+PrivateTmp=false
+UMask=0077
+NoNewPrivileges=true
+Environment=NODE_ENV=production
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=opencode-web
+
+[Install]
+WantedBy=multi-user.target

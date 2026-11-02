@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>OpenCode Web</title>
+  <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/vendor/xterm.js" defer></script>
+  <script src="/vendor/fit.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <button id="sidebar-toggle" class="icon-button mobile-only" aria-label="Toggle sessions" aria-expanded="false">☰</button>
+      <div class="brand"><span class="brand-mark" aria-hidden="true">oc</span><span>opencode<span class="brand-suffix"> / web</span></span></div>
+      <div class="connection"><span id="connection-dot" class="status-dot"></span><span id="connection-label">Connecting</span></div>
+      <div id="header-cwd" class="header-cwd" title="Authorized workspace">—</div>
+      <div class="topbar-actions">
+        <button id="new-session-top" class="button primary compact">New session</button>
+        <button id="logout" class="button ghost compact">Sign out</button>
+      </div>
+    </header>
+
+    <div class="workspace-layout">
+      <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+      <aside id="sidebar" class="sidebar" aria-label="Sessions">
+        <div class="sidebar-heading"><span class="eyebrow">SESSIONS</span><span id="session-count" class="count">0</span></div>
+        <div id="session-list" class="session-list"></div>
+        <button id="new-session-sidebar" class="button new-session-button">+ New session</button>
+        <div class="sidebar-footer">
+          <div><span class="status-dot running"></span>Persistent tmux sessions</div>
+          <p>Closing this browser does not stop OpenCode.</p>
+          <p id="workspace-label" class="workspace-path"></p>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <div class="session-toolbar">
+          <div class="session-heading"><span id="current-session-name">No session selected</span><span id="current-session-status" class="session-state"></span></div>
+          <div class="session-actions">
+            <button id="restart-session" class="button ghost compact" disabled>Restart</button>
+            <button id="stop-session" class="button ghost compact" disabled>Stop</button>
+            <button id="download-transcript" class="icon-button" title="Download terminal transcript" aria-label="Download terminal transcript" disabled>↓</button>
+            <button id="close-session" class="icon-button danger-text" title="Close and remove session" aria-label="Close and remove session" disabled>×</button>
+          </div>
+        </div>
+        <div id="cwd-bar" class="cwd-bar"><span>cwd</span><code id="current-cwd">—</code><span id="terminal-size" class="terminal-size"></span></div>
+
+        <section class="terminal-region" aria-label="OpenCode terminal">
+          <div id="terminal" class="terminal-container"></div>
+          <div id="empty-state" class="empty-state">
+            <pre class="empty-mark" aria-hidden="true">┌──────────────────────┐
+│  opencode on server  │
+└──────────────────────┘</pre>
+            <h2>Your terminal, still here.</h2>
+            <p>Start a session to open the actual OpenCode TUI.<br>It runs on the server and survives browser disconnects.</p>
+            <button id="new-session-empty" class="button primary">Start a session</button>
+          </div>
+          <div id="terminal-overlay" class="terminal-overlay" hidden><span id="overlay-message">Reconnecting…</span><button id="reconnect-now" class="button compact">Reconnect</button></div>
+        </section>
+
+        <div class="mobile-keys" aria-label="Terminal keys">
+          <button data-key="esc">Esc</button><button data-key="tab">Tab</button><button data-key="ctrl-c">Ctrl C</button>
+          <button data-key="left">←</button><button data-key="up">↑</button><button data-key="down">↓</button><button data-key="right">→</button>
+          <button id="focus-terminal">Keyboard</button>
+        </div>
+
+        <form id="composer" class="composer">
+          <div class="composer-main">
+            <span class="prompt-chevron" aria-hidden="true">›</span>
+            <label for="prompt" class="sr-only">Multiline prompt or OpenCode command</label>
+            <textarea id="prompt" rows="2" maxlength="32000" placeholder="Send a prompt or /command to OpenCode…" disabled></textarea>
+            <button id="send-prompt" class="button primary send-button" type="submit" disabled>Send <span aria-hidden="true">↵</span></button>
+          </div>
+          <div class="composer-help"><span>Enter to send · Shift Enter for a new line · ↑/↓ history</span><div><button id="clear-history" type="button" class="text-button">Clear history</button><span id="composer-status">Direct terminal input is also active</span></div></div>
+        </form>
+      </main>
+    </div>
+  </div>
+
+  <dialog id="new-session-dialog" class="dialog">
+    <form id="new-session-form" method="dialog">
+      <div class="dialog-heading"><h2>New session</h2><button type="button" class="icon-button" data-close-dialog aria-label="Close">×</button></div>
+      <p class="muted">Launches the real OpenCode CLI in a persistent server-side terminal.</p>
+      <label for="session-name">Name</label>
+      <input id="session-name" name="name" maxlength="64" placeholder="My project" autocomplete="off">
+      <label for="session-directory">Working directory</label>
+      <input id="session-directory" name="cwd" value="." required autocomplete="off" spellcheck="false">
+      <p class="field-help">Relative to the authorized workspace. Existing subdirectories only; symlink escapes are rejected.</p>
+      <p id="new-session-error" class="form-error" role="alert" hidden></p>
+      <div class="dialog-actions"><button type="button" class="button" data-close-dialog>Cancel</button><button id="create-session-submit" type="submit" class="button primary">Create session</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" class="dialog">
+    <form method="dialog">
+      <div class="dialog-heading"><h2 id="confirm-title">Confirm</h2></div>
+      <p id="confirm-message" class="muted"></p>
+      <div class="dialog-actions"><button value="cancel" class="button">Cancel</button><button id="confirm-action" value="confirm" class="button danger">Confirm</button></div>
+    </form>
+  </dialog>
+  <div id="toast" class="toast" role="status" hidden></div>
+</body>
+</html>
