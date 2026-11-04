@@ -161,6 +161,13 @@ line 1 with `---` and include `sdk`, `sdk_version`, and `app_file`.
 Add a Space **Secret** named `WEB_PASSWORD` with at least 16 characters, then
 restart the Space.
 
+### `EADDRINUSE 127.0.0.1:7861` or `svelte-i18n` startup error
+
+Update to the current `app.py` and `server.js`, then restart the Space. The wrapper
+explicitly disables Gradio's optional Node SSR renderer and asks the OS for a free
+loopback port for the OpenCode backend instead of hard-coding `7861`. The health
+check also verifies that it reached OpenCode, not another local service.
+
 ### `ENOENT ... index.html`
 
 Run the app from the repository root. `index.html` is at the root and is served by
@@ -185,4 +192,5 @@ API credits.
 npm run doctor
 npm test
 npm run test:integration   # requires tmux and OpenCode; no model credentials needed for attach tests
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'  # Space wrapper regressions
 ```
