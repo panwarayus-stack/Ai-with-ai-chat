@@ -86,7 +86,9 @@ export async function createApp(overrides = {}) {
   app.get('/login', (req, res) => res.sendFile(path.join(ROOT, 'public', 'login.html')));
   app.get('/', (req, res) => {
     if (!auth.fromRequest(req)) return res.redirect('/login');
-    res.set('Cache-Control', 'no-store').sendFile(path.join(ROOT, 'public', 'index.html'));
+    // The browser entrypoint lives at the project root so hosts that read
+    // ./index.html (for example /app/applet/index.html) find it directly.
+    res.set('Cache-Control', 'no-store').sendFile(path.join(ROOT, 'index.html'));
   });
   app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
   app.use((error, req, res, next) => {

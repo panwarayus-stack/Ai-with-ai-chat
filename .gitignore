@@ -10,3 +10,7 @@ test-results/
 
 .build/
 .tools/
+.venv/
+__pycache__/
+*.pyc
+.gradio/

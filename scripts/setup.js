@@ -70,6 +70,7 @@ if (generatedPassword) {
   console.log(`Password: ${generatedPassword}`);
   console.log('The password is also in .env on the server. It is never sent to browser code.');
 }
-console.log('\nNext: npm start (foreground), or bash deploy/install.sh (persistent service).');
-console.log('Provider setup: open a session and use OpenCode /connect, or run opencode auth login over SSH.');
+console.log('\nNext: npm start for local development, or push this repository to a Hugging Face Gradio/ZeroGPU Space.');
+console.log('For Hugging Face, set WEB_PASSWORD as a Space secret; do not commit .env.');
+console.log('Provider setup: open a session and use OpenCode /connect, or allowlist provider secrets with TERMINAL_ENV_ALLOWLIST.');
 console.log('Skills: unchanged (no skills were requested).');
