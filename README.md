@@ -1,79 +1,90 @@
+---
+title: OpenCode Web
+emoji: 🖥️
+colorFrom: gray
+colorTo: green
+sdk: gradio
+sdk_version: 5.49.1
+python_version: "3.12"
+app_file: app.py
+suggested_hardware: zero-a10g
+startup_duration_timeout: 30m
+pinned: false
+short_description: Browser terminal for the real OpenCode CLI
+---
+
 # OpenCode Web
 
-A small, authenticated browser terminal for the **real OpenCode CLI** running on your own server.
+A self-hosted browser terminal for the **real OpenCode CLI/TUI**. This is not a
+chatbot, an API wrapper, or a simulated terminal. The server runs OpenCode inside
+`tmux`, streams the terminal to xterm.js over WebSockets, and keeps sessions alive
+when the browser disconnects.
 
-This is not a chatbot, not an API wrapper, and not a simulated terminal. The browser renders the actual OpenCode TUI with xterm.js. Node.js/Express/WebSockets/`node-pty` attach to a detached `tmux` pane, so closing the browser does not stop OpenCode.
+This repository is configured as a **Hugging Face Space** using the **Gradio SDK**
+and **ZeroGPU** hardware. The Gradio/FastAPI process in `app.py` is only a
+supervisor/reverse proxy; the actual terminal is still the Node/Express app.
 
-```text
-Android / PC browser
-  └─ xterm.js + multiline composer
-       └─ authenticated WebSocket
-            └─ Express + node-pty recorder
-                 └─ tmux pane
-                      └─ real OpenCode CLI
-```
+> **Important:** OpenCode does **not** use the ZeroGPU GPU. It talks to whichever
+> model provider you configure, using your provider credentials/credits. ZeroGPU
+> is used here because free ZeroGPU Spaces can host Gradio apps; the GPU function
+> in `app.py` is only a compatibility probe and is not called by the terminal.
 
-## What is included
+## Hugging Face Space deployment
 
-- OpenCode dark terminal-style interface, responsive for desktop and mobile.
-- Multiple named sessions in an authorized workspace.
-- Real-time terminal input/output, including OpenCode slash commands and permission prompts.
-- Reconnect with recent ANSI output replay.
-- Rotated terminal transcripts on disk.
-- Multiline prompt composer, per-session prompt history on the device, and mobile terminal keys.
-- Stop, restart, close, and transcript download controls.
-- Password authentication, HttpOnly cookie, CSRF checks, Origin checks, rate limits, and security headers.
-- systemd installer, with PM2 fallback/configuration.
-- OpenCode CLI pinned as a local npm dependency (`opencode-ai` 1.19.5 in this build).
-- No skills installed or changed, as requested.
+1. Create a new Space at <https://huggingface.co/new-space>.
+   - SDK: **Gradio**
+   - Hardware: **ZeroGPU** (`zero-a10g`)
+   - Visibility: your choice. A public Space exposes the login page to the internet;
+     keep `WEB_PASSWORD` strong.
+2. Push this repository to the Space, or upload these files. The Space needs at least:
+   - `README.md` (the YAML block at the top is required)
+   - `app.py`
+   - `requirements.txt`
+   - `packages.txt`
+   - `package.json`, `package-lock.json`
+   - `server.js`, `config.js`, `auth.js`, `sessions.js`, `terminal.js`
+   - `index.html`, `public/`
+3. In **Settings → Variables and secrets**, add these **Secrets**:
 
-## Important persistence semantics
+   | Name | Required | Purpose |
+   |---|---:|---|
+   | `WEB_PASSWORD` | yes | Terminal login password, at least 16 characters |
+   | `WEB_USERNAME` | no | Login username, defaults to `owner` |
+   | Provider credentials | yes, for model use | e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or use OpenCode `/connect` after login |
 
-| Event | Result |
-| --- | --- |
-| Close browser / lose network | OpenCode keeps running in tmux. Reconnect restores recent output. |
-| Restart the Node web service | OpenCode keeps running. The web service reattaches to existing tmux panes. |
-| Stop a session from the UI | OpenCode is asked to exit, then the pane is terminated after a grace period. Transcript is kept. |
-| Restart a stopped session | A new OpenCode TUI opens in the same directory. Use OpenCode `/sessions` to resume a native conversation. |
-| Reboot the VPS | Running processes cannot survive a reboot. systemd/PM2 restarts the web service; session metadata and transcripts remain. Stopped sessions can be restarted, and native OpenCode conversation history remains available through OpenCode. |
+   If you use provider environment variables, also add a **Variable** named
+   `TERMINAL_ENV_ALLOWLIST` containing the comma-separated names you want passed
+   into OpenCode, for example:
 
-The web service is kept running 24/7. Individual AI tasks are not automatically resubmitted after a reboot.
+   ```text
+   ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY
+   ```
 
-## Requirements
+   Secrets are not exposed to the browser. They are only passed to the OpenCode
+   child process when explicitly allowlisted.
+4. Wait for the Space to build and start. On first boot `app.py` installs the Node
+   dependencies from `package-lock.json`, starts the Node backend on an internal
+   port, and proxies HTTP/WebSocket traffic from the public Space port `7860`.
+5. Open the Space and log in. The terminal is at `/`; a minimal Gradio status page
+   is at `/gradio`.
 
-- Linux VPS with Node.js **22–24** and npm.
-- A non-root user with `sudo` for the installer.
-- `tmux`, `python3`, `make`, and `g++` (the Debian/Ubuntu installer installs missing packages).
-- Outbound access to your chosen AI provider. Provider credentials are configured in OpenCode, not in the website.
+### Free ZeroGPU limits and persistence
 
-## Install on a Debian/Ubuntu VPS
+- Free personal accounts in good standing can host up to **2 ZeroGPU Spaces**.
+- Free hardware can sleep when inactive. A sleeping/restarted Space is **not** a
+  24/7 VPS.
+- Space disk is ephemeral. `tmux` sessions, transcripts, and OpenCode auth stored
+  on local disk can be lost when the Space restarts. Browser disconnect/reconnect
+  while the Space is running still preserves the session.
+- ZeroGPU GPU quota applies to `@spaces.GPU` calls. Normal OpenCode terminal use
+  does not call the GPU probe, but your model provider may still charge you.
+- If you need guaranteed 24/7 persistence, use a paid always-on host or attach
+  durable storage and design backup/restore around it.
 
-Copy this repository's contents to the server, for example as `/opt/opencode-web`, owned by your service user:
+## Local development
 
-```bash
-sudo mkdir -p /opt/opencode-web
-sudo chown "$USER:$USER" /opt/opencode-web
-# Copy the repository files into /opt/opencode-web, then:
-cd /opt/opencode-web
-bash deploy/install.sh
-```
-
-The browser entrypoint is `index.html` at the project root. If a host reads `/app/applet/index.html`, deploy the repository contents directly into `/app/applet` and start the app with `npm start` (or the included service installer), not an unrelated `server.ts`.
-
-The installer verifies each important step:
-
-1. Prints OS, Node.js, and npm versions.
-2. Installs missing tmux/native-build packages.
-3. Runs `npm ci` to install the pinned OpenCode CLI, xterm.js, Express, ws, and node-pty.
-4. Generates a private `.env` with a random website password.
-5. Creates `~/opencode-workspace` and a conservative OpenCode outside-directory approval policy.
-6. Runs `npm run doctor`.
-7. Installs and enables systemd when available, otherwise starts PM2.
-8. Checks the HTTP health endpoint.
-
-The setup command prints the generated website username/password once. They are also stored in the server-side `.env` file. Do not commit or publish that file.
-
-### Manual setup
+Requirements: Node.js 22-24, npm, tmux 3.2+, Python 3.10+ if running the Space
+wrapper locally.
 
 ```bash
 npm ci
@@ -82,174 +93,96 @@ npm run doctor
 npm start
 ```
 
-`npm start` is foreground-only. Use systemd or PM2 for persistent operation.
+Open <http://localhost:3000>. `npm run setup` creates a local `.env` with a random
+password and a dedicated `~/opencode-workspace` directory.
 
-## First sign-in and provider setup
-
-1. Open the website over HTTPS and sign in with the generated website credentials.
-2. Create a session. The real OpenCode TUI opens in `~/opencode-workspace`.
-3. Connect a provider using OpenCode itself:
-   - In the TUI, use `/connect`; or
-   - Over SSH as the same service user: `./node_modules/.bin/opencode auth login`.
-4. Choose a model in OpenCode and start prompting.
-
-Provider credentials are stored by OpenCode in the service user's home directory. The web frontend never receives provider keys. The terminal environment is allowlisted; arbitrary server environment variables are not passed through. If you intentionally use environment-based provider credentials, add only the variable **names** to `TERMINAL_ENV_ALLOWLIST` in `.env`, then restart the web service.
-
-No OpenCode skills were installed. Existing skills/configuration are preserved. To add skills later, use OpenCode's normal `.opencode/skills/<name>/SKILL.md` layout in the workspace or global config directory.
-
-## Using the interface
-
-- **Terminal:** click the terminal and type exactly as in a local OpenCode terminal. Permission prompts, slash commands, and TUI shortcuts are handled by OpenCode.
-- **Composer:** Enter sends; Shift+Enter inserts a newline. Multiline text is bracketed-pasted into the same TUI. Up/Down recalls device-local prompt history.
-- **Sessions:** create, switch, stop, restart, or close from the sidebar/toolbar.
-- **Transcript:** the download button exports the retained ANSI terminal log. Treat transcripts as sensitive; they can contain prompts, file paths, and tool output.
-- **Mobile:** use the key row for Esc, Tab, Ctrl-C, and arrows. The composer is useful for longer prompts.
-
-Prompt history/drafts are stored in browser local/session storage per web session. Raw keystrokes are not separately logged by the web server; terminal output is logged as emitted by the TUI. Clear history on shared devices.
-
-## HTTPS and public access
-
-Do **not** expose the raw HTTP terminal port to the public internet. Password authentication does not encrypt traffic.
-
-Recommended: Caddy on the VPS, with the Node app bound to loopback.
-
-`/etc/caddy/Caddyfile`:
-
-```caddyfile
-code.example.com {
-    reverse_proxy 127.0.0.1:3000
-}
-```
-
-`.env` for that deployment:
-
-```dotenv
-HOST=127.0.0.1
-PORT=3000
-PUBLIC_URL=https://code.example.com
-COOKIE_SECURE=true
-COOKIE_SAME_SITE=strict
-TRUST_PROXY=1
-FRAME_ANCESTORS="'none'"
-```
-
-Restart the service after editing `.env`:
+To run the Hugging Face wrapper locally:
 
 ```bash
-sudo systemctl restart opencode-web
-# or: npx pm2 restart opencode-web
+python -m venv .venv
+.venv/bin/pip install -r requirements.txt
+WEB_PASSWORD='a-long-local-password' PUBLIC_URL='http://localhost:7860' COOKIE_SECURE=false COOKIE_SAME_SITE=strict .venv/bin/python app.py
 ```
 
-Allow ports 80/443 in the firewall, not port 3000. Caddy obtains HTTPS certificates automatically. Nginx/Certbot or another trusted TLS reverse proxy also works; forward WebSocket upgrade headers and set `TRUST_PROXY` to the number of trusted proxy hops.
+Open <http://localhost:7860>.
 
-Without a domain, use an SSH tunnel from a PC:
+## Controls
 
-```bash
-ssh -L 3000:127.0.0.1:3000 user@your-vps
-# then open http://127.0.0.1:3000
-```
+- `Ctrl-B D`: detach from the terminal without stopping OpenCode.
+- `Ctrl-C`: interrupt the foreground OpenCode task.
+- `Ctrl-B [`: tmux copy/scroll mode; `q` exits it.
+- UI buttons: new session, reconnect, detach, stop, restart, upload, download
+  transcript, history, multiline input.
 
-For Android, use a private VPN such as WireGuard/Tailscale or a proper HTTPS domain. Do not use plain HTTP over the public internet.
-
-## Service management
-
-### systemd (preferred)
-
-```bash
-sudo systemctl status opencode-web
-sudo systemctl restart opencode-web
-sudo systemctl stop opencode-web
-journalctl -u opencode-web -f
-```
-
-The unit uses `KillMode=process` so restarting the Node bridge does not kill detached tmux/OpenCode processes. It disables `PrivateTmp` so the tmux socket remains reachable across bridge restarts.
-
-### PM2
-
-```bash
-npx pm2 start ecosystem.config.cjs
-npx pm2 status
-npx pm2 restart opencode-web
-npx pm2 stop opencode-web
-npx pm2 logs opencode-web
-```
-
-For reboot persistence, run `npx pm2 startup`, execute the command it prints, then run `npx pm2 save`. The ecosystem config disables tree-kill so the web bridge can restart without killing tmux.
-
-## Configuration
-
-See `.env.example`. Important values:
-
-| Variable | Purpose |
-| --- | --- |
-| `WEB_USERNAME`, `WEB_PASSWORD` | Website sign-in. Password must be 16–256 characters. |
-| `WORKSPACE_DIR` | Authorized workspace root. New sessions can start only in existing real subdirectories. |
-| `PUBLIC_URL` | Exact public HTTPS origin; used for Origin validation. |
-| `COOKIE_SECURE`, `COOKIE_SAME_SITE` | Use `true`/`strict` behind HTTPS. `none` requires Secure. |
-| `TRUST_PROXY` | Trusted reverse-proxy hop count; `0` when directly exposed. |
-| `MAX_SESSIONS` | Maximum web sessions (default 8). |
-| `REPLAY_BUFFER_BYTES` | Recent output replayed on reconnect (default 2 MiB). |
-| `LOG_FILE_BYTES` | Size of each of two rotated transcript files per session (default 16 MiB). |
-| `OPENCODE_BIN`, `TMUX_BIN` | Optional explicit executable paths. |
-| `TERMINAL_ENV_ALLOWLIST` | Optional provider/environment variable names passed to OpenCode. |
-
-Website login sessions are in memory and expire after 12 hours by default. Restarting the web service signs browsers out, but does not stop tmux/OpenCode sessions.
-
-## Security model and limits
-
-- Single-owner password authentication; this is not a multi-tenant platform.
-- HttpOnly, SameSite cookie; CSRF token for mutations and WebSocket attach; strict Origin validation.
-- Login/API rate limits and WebSocket input size/rate limits.
-- Session working directories are resolved with `realpath`; traversal and symlink escapes outside `WORKSPACE_DIR` are rejected.
-- The generated workspace OpenCode policy asks before outside-directory access. This is an approval guard, **not an OS sandbox**. OpenCode can still act with the permissions of the service user.
-- Run as a dedicated non-root Unix user. Keep secrets and unrelated projects out of that user's reach. Do not grant that user passwordless sudo.
-- Terminal transcripts and session metadata are stored under `DATA_DIR` with private permissions. Protect backups of that directory and OpenCode's auth storage.
-- Multiple browsers can view the same terminal; the most recent resize wins. Anyone signed in can control all sessions.
-
-## Project layout
+## Architecture
 
 ```text
-.
-├── index.html             browser terminal entrypoint (project root)
-├── server.js              Express, auth routes, WebSocket upgrade
-├── sessions.js            tmux session lifecycle and metadata
-├── terminal.js            node-pty bridge, replay buffer, transcript rotation
-├── auth.js                password/cookie/CSRF/Origin checks
-├── config.js              environment and workspace validation
-├── ecosystem.config.cjs   PM2 configuration
-├── .env.example
-├── public/                app.js, login page, mobile-friendly CSS
-├── scripts/               setup, doctor, systemd installer
-├── deploy/                VPS installer and systemd unit template
-└── tests/                 unit + real OpenCode/tmux integration tests
+Browser (xterm.js)
+  │ HTTPS/WSS
+  ▼
+Hugging Face Space port 7860
+  app.py: FastAPI + Gradio status page + reverse proxy
+  │ HTTP/WS on 127.0.0.1
+  ▼
+server.js: Express + authenticated WebSocket attach
+  │ node-pty
+  ▼
+tmux session per terminal
+  │
+  ▼
+real OpenCode CLI/TUI
 ```
+
+The Node backend keeps a server-side PTY bridge and bounded replay buffer for each
+session. Closing the browser detaches viewers but does not kill OpenCode. On a
+Space restart, however, the container and its local `tmux` sessions are recreated.
+
+## Security
+
+- Password login, HttpOnly session cookie, CSRF checks for mutations and WebSocket
+  attach, exact Origin validation, and rate limits.
+- Working directories are restricted to `WORKSPACE_DIR`.
+- Provider secrets are kept server-side and only passed to OpenCode through
+  `TERMINAL_ENV_ALLOWLIST`.
+- The Node backend binds only to loopback inside the Space; only `app.py` listens
+  on the public port.
+- This is not an OS sandbox. Anyone with the terminal password can run commands
+  as the Space user. Do not share the password.
+
+## Troubleshooting
+
+### Configuration error: Missing configuration in README
+
+The YAML front matter at the very top of `README.md` is required. It must start on
+line 1 with `---` and include `sdk`, `sdk_version`, and `app_file`.
+
+### Space fails with `WEB_PASSWORD is missing or too short`
+
+Add a Space **Secret** named `WEB_PASSWORD` with at least 16 characters, then
+restart the Space.
+
+### `ENOENT ... index.html`
+
+Run the app from the repository root. `index.html` is at the root and is served by
+`server.js`; there is no `/app/applet` path in this project.
+
+### Node dependencies fail to build
+
+`packages.txt` installs `build-essential`, `python3-dev`, and `tmux`. The Space
+wrapper uses `nodejs-wheel` and sets `npm_config_nodedir` to its bundled Node
+headers so `node-pty` can compile. Check the Space logs for the first failing npm
+package.
+
+### Terminal works but model calls fail
+
+OpenCode still needs valid provider credentials. Use `/connect` inside OpenCode or
+set provider secrets and `TERMINAL_ENV_ALLOWLIST`. ZeroGPU does not provide model
+API credits.
 
 ## Verification
 
 ```bash
 npm run doctor
 npm test
+npm run test:integration   # requires tmux and OpenCode; no model credentials needed for attach tests
 ```
-
-The integration test starts the real OpenCode CLI in tmux and checks authentication, streaming output, browser reconnect, web-service restart with the same OpenCode PID, stop/restart, and cleanup. It does not send an AI prompt or require provider credentials.
-
-On the VPS also verify:
-
-```bash
-sudo systemctl is-enabled opencode-web
-sudo systemctl is-active opencode-web
-curl -fsS http://127.0.0.1:3000/api/health
-```
-
-Then test from a browser: create a session, disconnect/reconnect, restart the web service, and confirm the session is still running. Finally reboot the VPS and confirm the web service returns and transcripts/session history remain.
-
-## Troubleshooting
-
-- **`ENOENT ... index.html`:** start this project from its root (`npm start`). The entrypoint is `./index.html`; do not run an unrelated generated `server.ts` that expects a different layout.
-- **`node-pty` build fails:** install `python3 make g++` and Node headers. On restricted networks, point `npm_config_nodedir` at a local Node installation containing `include/node`.
-- **`tmux` missing:** `sudo apt-get install tmux`.
-- **Login says Origin not allowed:** set `PUBLIC_URL` to the exact browser origin and configure `TRUST_PROXY` for your reverse proxy.
-- **Blank terminal after create:** wait for OpenCode startup, then press Enter or resize. Check `journalctl -u opencode-web -f` and OpenCode logs under the service user's `~/.local/share/opencode/log`.
-- **No model/provider:** run OpenCode `/connect` or `opencode auth login` as the service user.
-- **Session stopped after reboot:** expected. Restart it from the UI and use OpenCode `/sessions` to resume the native conversation.
-- **Disk usage:** transcripts are bounded to two rotated files per session, but native OpenCode history/snapshots are managed by OpenCode. Monitor the service user's data directory.

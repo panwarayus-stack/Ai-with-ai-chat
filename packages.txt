@@ -1,0 +1,5 @@
+tmux
+build-essential
+python3-dev
+ca-certificates
+git

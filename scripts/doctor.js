@@ -26,5 +26,5 @@ check('authentication', () => { if (config.password.length < 16) throw new Error
 check('public origin', () => config.publicUrl || 'derived from request; set PUBLIC_URL for production');
 check('HTTPS cookies', () => config.secure ? 'Secure enabled' : 'disabled — use HTTPS before public deployment');
 console.log('\nProvider credentials are managed by OpenCode. Run `opencode auth list` as the service user to inspect them.');
-console.log('Service checks: `systemctl status opencode-web` or `npx pm2 status`.');
+console.log('Hugging Face: check the Space logs and Settings → Variables and secrets; local: npm start.');
 process.exitCode = failures ? 1 : 0;
