@@ -21,9 +21,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+import spaces
 import gradio as gr
 import httpx
-import spaces
 import uvicorn
 from dotenv import load_dotenv
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
@@ -31,7 +31,21 @@ from fastapi.responses import Response
 from websockets.asyncio.client import connect as ws_connect
 
 ROOT = Path(__file__).resolve().parent
-PUBLIC_PORT = int(os.environ.get("PORT", "7860"))
+
+
+def public_port() -> int:
+    """Return the port the Hugging Face Space router expects.
+
+    Gradio Spaces expose GRADIO_SERVER_PORT (normally 7860). Some ZeroGPU
+    runtimes also set PORT to an internal port, so prefer the Gradio port when
+    running inside a Space. Local development can still use PORT.
+    """
+    if os.environ.get("SPACE_ID") or os.environ.get("SPACES_ZERO_GPU"):
+        return int(os.environ.get("GRADIO_SERVER_PORT", "7860"))
+    return int(os.environ.get("PORT", "7860"))
+
+
+PUBLIC_PORT = public_port()
 NODE_MIN_MAJOR = 22
 NODE_MAX_MAJOR = 25
 HOP_HEADERS = {
@@ -66,6 +80,26 @@ def zerogpu_probe() -> dict:
         }
     except Exception as exc:  # pragma: no cover - only used if manually called
         return {"cuda_available": False, "error": str(exc)}
+
+
+def report_zerogpu_startup() -> bool:
+    """Send ZeroGPU's startup report when serving FastAPI with uvicorn.
+
+    The `spaces` package normally sends this report from a patched
+    `gradio.Blocks.launch()`. This Space mounts Gradio onto FastAPI and calls
+    `uvicorn.run()` instead, so `launch()` is never reached. Without the report
+    the platform stops the container with:
+    "No @spaces.GPU function detected during startup".
+
+    Off ZeroGPU, `spaces.zero.startup` is not defined and this is a no-op.
+    """
+    try:
+        from spaces.zero import startup  # type: ignore[attr-defined]
+    except ImportError:
+        return False
+    startup()
+    log.info("ZeroGPU startup report sent")
+    return True
 
 
 def _node_version_ok(executable: str) -> bool:
@@ -381,4 +415,5 @@ async def proxy_all(request: Request, path: str) -> Response:
 
 
 if __name__ == "__main__":
+    report_zerogpu_startup()
     uvicorn.run(app, host="0.0.0.0", port=PUBLIC_PORT, ws_max_size=8 * 1024 * 1024)
