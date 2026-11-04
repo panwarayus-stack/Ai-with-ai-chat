@@ -14,6 +14,7 @@ import hashlib
 import logging
 import os
 import shutil
+import socket
 import subprocess
 import time
 from contextlib import asynccontextmanager
@@ -30,7 +31,6 @@ from fastapi.responses import Response
 from websockets.asyncio.client import connect as ws_connect
 
 ROOT = Path(__file__).resolve().parent
-INTERNAL_PORT = int(os.environ.get("OPENCODE_INTERNAL_PORT", "7861"))
 PUBLIC_PORT = int(os.environ.get("PORT", "7860"))
 NODE_MIN_MAJOR = 22
 NODE_MAX_MAJOR = 25
@@ -41,10 +41,14 @@ HOP_HEADERS = {
 }
 
 load_dotenv(ROOT / ".env")
+# The terminal is served by Node/xterm.js. Gradio's optional Node SSR renderer
+# is not needed and can otherwise occupy the same internal port range.
+os.environ["GRADIO_SSR_MODE"] = "false"
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("opencode-space")
 
 node_process: Optional[subprocess.Popen] = None
+internal_port: Optional[int] = None
 http_client: Optional[httpx.AsyncClient] = None
 
 
@@ -151,10 +155,17 @@ def ensure_runtime_dirs() -> tuple[Path, Path]:
     return workspace, data_dir
 
 
-def child_environment(workspace: Path, data_dir: Path) -> dict[str, str]:
+def free_loopback_port() -> int:
+    """Ask the OS for an unused loopback port instead of assuming 7861 is free."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def child_environment(workspace: Path, data_dir: Path, port: int) -> dict[str, str]:
     env = os.environ.copy()
     env["HOST"] = "127.0.0.1"
-    env["PORT"] = str(INTERNAL_PORT)
+    env["PORT"] = str(port)
     env["WORKSPACE_DIR"] = str(workspace)
     env["DATA_DIR"] = str(data_dir)
     env.setdefault("COOKIE_SECURE", "true")
@@ -173,8 +184,8 @@ def child_environment(workspace: Path, data_dir: Path) -> dict[str, str]:
     return env
 
 
-def start_node() -> None:
-    global node_process
+def start_node() -> int:
+    global node_process, internal_port
     password = os.environ.get("WEB_PASSWORD", "")
     if len(password) < 16:
         raise RuntimeError(
@@ -185,30 +196,37 @@ def start_node() -> None:
     node_cmd, npm_cmd, nodedir = node_tools()
     ensure_npm_dependencies(node_cmd, npm_cmd, nodedir)
     workspace, data_dir = ensure_runtime_dirs()
-    env = child_environment(workspace, data_dir)
+    port = free_loopback_port()
+    env = child_environment(workspace, data_dir, port)
 
-    log.info("Starting OpenCode Node backend on 127.0.0.1:%s", INTERNAL_PORT)
+    log.info("Starting OpenCode Node backend on 127.0.0.1:%s", port)
     node_process = subprocess.Popen(node_cmd + ["server.js"], cwd=ROOT, env=env)
     atexit.register(stop_node)
 
     deadline = time.monotonic() + 120
-    url = f"http://127.0.0.1:{INTERNAL_PORT}/api/health"
-    while time.monotonic() < deadline:
-        if node_process.poll() is not None:
-            raise RuntimeError(f"OpenCode backend exited early with code {node_process.returncode}")
-        try:
-            if httpx.get(url, timeout=2).status_code == 200:
-                log.info("OpenCode backend is healthy")
-                return
-        except httpx.HTTPError:
-            pass
-        time.sleep(0.5)
-    stop_node()
-    raise RuntimeError("OpenCode backend did not become healthy within 120 seconds")
+    url = f"http://127.0.0.1:{port}/api/health"
+    try:
+        while time.monotonic() < deadline:
+            if node_process.poll() is not None:
+                raise RuntimeError(f"OpenCode backend exited early with code {node_process.returncode}")
+            try:
+                response = httpx.get(url, timeout=2)
+                if response.status_code == 200 and response.json() == {"ok": True, "service": "opencode-web"}:
+                    internal_port = port
+                    log.info("OpenCode backend is healthy")
+                    return port
+            except (httpx.HTTPError, ValueError):
+                pass
+            time.sleep(0.5)
+        raise RuntimeError("OpenCode backend did not become healthy within 120 seconds")
+    except Exception:
+        stop_node()
+        raise
 
 
 def stop_node() -> None:
-    global node_process
+    global node_process, internal_port
+    internal_port = None
     if node_process is None:
         return
     proc = node_process
@@ -226,9 +244,9 @@ def stop_node() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     global http_client
-    start_node()
+    port = await asyncio.to_thread(start_node)
     http_client = httpx.AsyncClient(
-        base_url=f"http://127.0.0.1:{INTERNAL_PORT}",
+        base_url=f"http://127.0.0.1:{port}",
         timeout=httpx.Timeout(60.0, connect=10.0),
         follow_redirects=False,
     )
@@ -284,6 +302,10 @@ async def _proxy_http(request: Request) -> Response:
 @app.websocket("/ws")
 async def proxy_websocket(ws: WebSocket) -> None:
     await ws.accept()
+    port = internal_port
+    if port is None:
+        await ws.close(code=1013)
+        return
     headers = {
         k: v for k, v in ws.headers.items()
         if k.lower() in {"cookie", "origin", "user-agent", "host"}
@@ -294,7 +316,7 @@ async def proxy_websocket(ws: WebSocket) -> None:
     headers["x-forwarded-host"] = ws.headers.get("host", "")
     try:
         async with ws_connect(
-            f"ws://127.0.0.1:{INTERNAL_PORT}/ws",
+            f"ws://127.0.0.1:{port}/ws",
             additional_headers=headers,
             max_size=8 * 1024 * 1024,
             ping_interval=20,
@@ -345,7 +367,7 @@ with gr.Blocks(title="OpenCode Web Status") as status_ui:
     )
     gr.HTML('<a href="/" target="_top">Open the terminal</a>')
 
-app = gr.mount_gradio_app(app, status_ui, path="/gradio")
+app = gr.mount_gradio_app(app, status_ui, path="/gradio", ssr_mode=False)
 
 
 @app.api_route("/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])

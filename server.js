@@ -42,7 +42,7 @@ export async function createApp(overrides = {}) {
   const apiLimiter = rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests' } });
   app.use('/api', apiLimiter);
 
-  app.get('/api/health', (req, res) => res.json({ ok: true }));
+  app.get('/api/health', (req, res) => res.json({ ok: true, service: 'opencode-web' }));
   app.post('/api/login', loginLimiter, (req, res) => {
     if (!auth.validOrigin(req)) return res.status(403).json({ error: 'Origin not allowed' });
     if (!req.is('application/json')) return res.status(415).json({ error: 'Expected application/json' });
