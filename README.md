@@ -161,6 +161,13 @@ line 1 with `---` and include `sdk`, `sdk_version`, and `app_file`.
 Add a Space **Secret** named `WEB_PASSWORD` with at least 16 characters, then
 restart the Space.
 
+### `No @spaces.GPU function detected during startup`
+
+Update to the current `app.py` and restart the Space. The terminal is served by
+FastAPI/uvicorn, not `gradio.Blocks.launch()`, so the wrapper explicitly sends the
+ZeroGPU startup report that the `spaces` package would otherwise send only from
+`launch()`. The `@spaces.GPU` probe remains unused by normal terminal sessions.
+
 ### `EADDRINUSE 127.0.0.1:7861` or `svelte-i18n` startup error
 
 Update to the current `app.py` and `server.js`, then restart the Space. The wrapper
