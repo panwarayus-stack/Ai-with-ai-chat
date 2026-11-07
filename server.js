@@ -5,16 +5,22 @@ import express from 'express';
 import helmet from 'helmet';
 import { rateLimit } from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
-import { loadConfig, ROOT } from './config.js';
+import { loadConfig, applyWorkspaceDefaults, ROOT } from './config.js';
 import { Auth } from './auth.js';
 import { SessionManager } from './sessions.js';
 
 const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-const sendError = (res, error) => res.status(error.status || 500).json({ error: error.status ? error.message : 'Internal server error' });
+const sendError = (res, error) => res.status(error.status || 500).json({
+  error: error.status ? error.message : 'Internal server error',
+  ...(error.code ? { code: error.code } : {}),
+  ...(error.details ? { details: error.details } : {}),
+});
 
 export async function createApp(overrides = {}) {
   const config = overrides.config || loadConfig();
   fs.mkdirSync(config.dataDir, { recursive: true, mode: 0o700 });
+  const defaultModel = overrides.config ? null : applyWorkspaceDefaults(config);
+  const providers = config.providerEnvNames.filter(name => Boolean(process.env[name]));
   const auth = new Auth(config);
   const manager = new SessionManager(config);
   await manager.recover();
@@ -42,6 +48,7 @@ export async function createApp(overrides = {}) {
   const apiLimiter = rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: 'draft-8', legacyHeaders: false, message: { error: 'Too many requests' } });
   app.use('/api', apiLimiter);
 
+  // The Space wrapper asserts this exact shape, so keep it stable.
   app.get('/api/health', (req, res) => res.json({ ok: true, service: 'opencode-web' }));
   app.post('/api/login', loginLimiter, (req, res) => {
     if (!auth.validOrigin(req)) return res.status(403).json({ error: 'Origin not allowed' });
@@ -60,9 +67,26 @@ export async function createApp(overrides = {}) {
     res.json({ ok: true });
   });
   app.get('/api/me', protectedApi, (req, res) => res.json({ username: config.username, csrf: req.auth.csrf, expires: req.auth.expires }));
+  const notices = [];
+  if (!providers.length) {
+    notices.push({
+      id: 'no-provider',
+      level: 'warn',
+      text: 'No model provider key is configured, so OpenCode falls back to its shared OpenCode Zen free tier. That free allowance is counted per account and per network address and is usually already spent on shared cloud hosts, which shows up as "Free usage limit reached" right away. Add a Space secret such as ANTHROPIC_API_KEY, OPENAI_API_KEY or OPENROUTER_API_KEY, optionally OPENCODE_MODEL, then restart.',
+    });
+  } else if (!defaultModel && !(config.defaultModel)) {
+    notices.push({
+      id: 'pick-model',
+      level: 'info',
+      text: `Provider credentials detected (${providers.join(', ')}). OpenCode may still start on a free default model: run /models in the terminal once, or set OPENCODE_MODEL.`,
+    });
+  }
   app.get('/api/state', protectedApi, (req, res) => res.json({
     workspace: config.workspaceDir, maxSessions: config.maxSessions,
     sessions: manager.list(), persistence: 'tmux', skills: 'unchanged',
+    model: defaultModel || config.defaultModel || null,
+    providers, notices,
+    limits: { maxSessions: config.maxSessions, used: manager.sessions.size },
   }));
   app.get('/api/sessions', protectedApi, (req, res) => res.json({ sessions: manager.list() }));
   app.post('/api/sessions', protectedApi, asyncRoute(async (req, res) => {

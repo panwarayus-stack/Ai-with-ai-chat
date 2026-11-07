@@ -7,6 +7,35 @@ import { execFileSync } from 'node:child_process';
 
 export const ROOT = path.dirname(fileURLToPath(import.meta.url));
 
+// OpenCode reads model-provider credentials straight from the environment of the
+// process it runs in. The terminal deliberately starts with a tiny environment, so
+// without this list a Space secret such as ANTHROPIC_API_KEY would never reach the
+// CLI. OpenCode would then fall back to its OpenCode Zen free tier, which is
+// limited per account *and* per network address, and therefore looks "already
+// exhausted" on shared cloud hosts. Only these names are forwarded; site secrets
+// (WEB_*, COOKIE_*, ...) never are.
+export const PROVIDER_ENV_NAMES = Object.freeze([
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GEMINI_API_KEY',
+  'GOOGLE_GENERATIVE_AI_API_KEY',
+  'GROQ_API_KEY',
+  'MISTRAL_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'XAI_API_KEY',
+  'CEREBRAS_API_KEY',
+  'TOGETHER_API_KEY',
+  'FIREWORKS_API_KEY',
+  'OPENCODE_API_KEY',
+]);
+
+const FORBIDDEN_ENV = /^(WEB_|COOKIE_|SESSION_TTL|FRAME_ANCESTORS|PUBLIC_URL|TRUST_PROXY|DATA_DIR|WORKSPACE_DIR|TMUX|OPENCODE_BIN|OPENCODE_MODEL|PROVIDER_ENV_ALLOWLIST)/;
+
+function forbiddenEnvName(name) {
+  return FORBIDDEN_ENV.test(name);
+}
+
 function expandHome(value) {
   if (value === '~') return os.homedir();
   if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2));
@@ -72,9 +101,20 @@ export function loadConfig(env = process.env) {
   }
   const allowlist = (env.TERMINAL_ENV_ALLOWLIST || '').split(',').map(x => x.trim()).filter(Boolean);
   for (const name of allowlist) {
-    if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || /^(WEB_|COOKIE_|SESSION_TTL|FRAME_ANCESTORS|PUBLIC_URL|TRUST_PROXY|DATA_DIR|WORKSPACE_DIR|TMUX|OPENCODE_BIN)/.test(name)) {
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || forbiddenEnvName(name)) {
       throw new Error(`Invalid or forbidden TERMINAL_ENV_ALLOWLIST entry: ${name}`);
     }
+  }
+  const extraProviders = (env.PROVIDER_ENV_ALLOWLIST || '').split(',').map(x => x.trim()).filter(Boolean);
+  for (const name of extraProviders) {
+    if (!/^[A-Z_][A-Z0-9_]*$/i.test(name) || forbiddenEnvName(name)) {
+      throw new Error(`Invalid or forbidden PROVIDER_ENV_ALLOWLIST entry: ${name}`);
+    }
+  }
+  const providerEnvNames = [...new Set([...PROVIDER_ENV_NAMES, ...extraProviders])];
+  const defaultModel = (env.OPENCODE_MODEL || '').trim();
+  if (defaultModel && !/^[A-Za-z0-9][A-Za-z0-9._/-]{2,127}$/.test(defaultModel)) {
+    throw new Error('OPENCODE_MODEL must look like provider/model, for example anthropic/claude-sonnet-4-5');
   }
   return {
     host: env.HOST || '0.0.0.0',
@@ -91,26 +131,56 @@ export function loadConfig(env = process.env) {
     logFileBytes: integer('LOG_FILE_BYTES', 16 * 1024 * 1024, 1024 * 1024, 64 * 1024 * 1024, env),
     maxSessions: integer('MAX_SESSIONS', 8, 1, 32, env),
     terminalEnvAllowlist: allowlist,
+    providerEnvNames,
+    defaultModel,
   };
 }
 
-export function terminalEnvironment(config) {
-  const env = {
-    PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
-    HOME: process.env.HOME || os.homedir(),
-    USER: process.env.USER || os.userInfo().username,
-    LOGNAME: process.env.LOGNAME || os.userInfo().username,
-    LANG: process.env.LANG || 'C.UTF-8',
+export function terminalEnvironment(config, env = process.env) {
+  const environment = {
+    PATH: env.PATH || '/usr/local/bin:/usr/bin:/bin',
+    HOME: env.HOME || os.homedir(),
+    USER: env.USER || os.userInfo().username,
+    LOGNAME: env.LOGNAME || os.userInfo().username,
+    LANG: env.LANG || 'C.UTF-8',
     TERM: 'xterm-256color',
     COLORTERM: 'truecolor',
   };
-  for (const name of config.terminalEnvAllowlist) {
-    if (process.env[name] !== undefined) env[name] = process.env[name];
+  for (const name of config.terminalEnvAllowlist || []) {
+    if (env[name] !== undefined) environment[name] = env[name];
+  }
+  // Model-provider credentials only: these let the real OpenCode CLI authenticate
+  // instead of depending on the shared Zen free tier. They stay inside the tmux
+  // process; nothing here is ever serialized to the browser.
+  for (const name of config.providerEnvNames || []) {
+    if (env[name] !== undefined && environment[name] === undefined) environment[name] = env[name];
   }
   for (const name of ['LC_ALL', 'LC_CTYPE', 'TZ', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) {
-    if (process.env[name]) env[name] = process.env[name];
+    if (env[name]) environment[name] = env[name];
   }
-  return env;
+  return environment;
+}
+
+// OpenCode reads its project config from WORKSPACE_DIR/opencode.json. When a
+// default model is configured, record it once so every fresh Space container
+// starts on a paid/authenticated model instead of the shared free tier.
+export function applyWorkspaceDefaults(config) {
+  if (!config.defaultModel) return null;
+  const file = path.join(config.workspaceDir, 'opencode.json');
+  let data;
+  try {
+    const raw = fs.readFileSync(file, 'utf8');
+    data = raw.trim() ? JSON.parse(raw) : {};
+  } catch (error) {
+    if (error.code !== 'ENOENT') return null; // hand-edited JSONC: never rewrite it
+    data = {};
+  }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) return null;
+  if (typeof data.model === 'string' && data.model) return data.model;
+  data.$schema = data.$schema || 'https://opencode.ai/config.json';
+  data.model = config.defaultModel;
+  fs.writeFileSync(file, `${JSON.stringify(data, null, 2)}\n`, { mode: 0o600 });
+  return config.defaultModel;
 }
 
 export function isInside(parent, child) {

@@ -1,6 +1,6 @@
 /* global Terminal, FitAddon */
 const $ = selector => document.querySelector(selector);
-const state = { csrf: '', workspace: '', sessions: [], selected: null, ws: null, attached: false, reconnectTimer: null, reconnectDelay: 500, intentionalClose: false, history: [], historyIndex: -1, draft: '' };
+const state = { csrf: '', workspace: '', sessions: [], maxSessions: 8, notices: [], selected: null, ws: null, attached: false, reconnectTimer: null, reconnectDelay: 500, intentionalClose: false, history: [], historyIndex: -1, draft: '' };
 const term = new Terminal({
   cursorBlink: true, fontFamily: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
   fontSize: 13, lineHeight: 1.25, scrollback: 10000, convertEol: false, allowProposedApi: false,
@@ -33,7 +33,11 @@ async function api(url, options = {}) {
   const response = await fetch(url, { ...options, headers, credentials: 'same-origin' });
   if (response.status === 401) { location.replace('/login'); throw new Error('Sign in required'); }
   const body = await response.json();
-  if (!response.ok) throw new Error(body.error || 'Request failed');
+  if (!response.ok) {
+    const error = new Error(body.error || 'Request failed');
+    error.code = body.code; error.status = response.status;
+    throw error;
+  }
   return body;
 }
 let toastTimer;
@@ -53,7 +57,7 @@ function currentSession() { return state.sessions.find(session => session.id ===
 function renderSessions() {
   const list = $('#session-list');
   list.replaceChildren();
-  $('#session-count').textContent = `${state.sessions.length}`;
+  $('#session-count').textContent = `${state.sessions.length}/${state.maxSessions}`;
   if (!state.sessions.length) {
     const empty = document.createElement('p'); empty.className = 'session-list-empty'; empty.textContent = 'No sessions yet.'; list.append(empty);
   }
@@ -85,14 +89,44 @@ function renderToolbar() {
   $('#prompt').disabled = !session || session.status !== 'running';
   $('#send-prompt').disabled = $('#prompt').disabled;
   $('#empty-state').hidden = Boolean(session);
+  const capped = atSessionLimit();
+  const capMessage = capped ? `Session limit reached (${state.sessions.length}/${state.maxSessions}). Close a session first.` : '';
+  for (const selector of ['#new-session-top', '#new-session-sidebar', '#new-session-empty']) {
+    $(selector).title = capMessage;
+  }
+}
+function atSessionLimit() { return state.sessions.length >= state.maxSessions; }
+function renderNotices() {
+  const bar = $('#notice-bar');
+  bar.replaceChildren();
+  if (!state.notices.length) { bar.hidden = true; return; }
+  for (const notice of state.notices) {
+    const row = document.createElement('div');
+    row.className = `notice notice-${notice.level || 'info'}`;
+    const text = document.createElement('span');
+    text.textContent = notice.text;
+    const dismiss = document.createElement('button');
+    dismiss.type = 'button'; dismiss.className = 'notice-dismiss'; dismiss.textContent = '×';
+    dismiss.setAttribute('aria-label', 'Dismiss notice');
+    dismiss.addEventListener('click', () => {
+      state.notices = state.notices.filter(item => item !== notice);
+      renderNotices();
+    });
+    row.append(text, dismiss);
+    bar.append(row);
+  }
+  bar.hidden = false;
 }
 async function refreshState() {
   const data = await api('/api/state');
   state.workspace = data.workspace;
   state.sessions = data.sessions;
+  state.maxSessions = Number(data.maxSessions) || state.maxSessions;
+  state.notices = Array.isArray(data.notices) ? data.notices : [];
   $('#header-cwd').textContent = data.workspace;
   $('#workspace-label').textContent = data.workspace;
   renderSessions();
+  renderNotices();
 }
 function loadHistory() {
   try { state.history = JSON.parse(localStorage.getItem(`ocw-history-${state.selected}`) || '[]').slice(-100); } catch { state.history = []; }
@@ -168,6 +202,10 @@ function connect() {
   ws.addEventListener('error', () => setConnection('error', 'Connection error'));
 }
 function openNewSession() {
+  if (atSessionLimit()) {
+    toast(`Session limit reached (${state.sessions.length}/${state.maxSessions}). Close a session with × first.`, true);
+    return;
+  }
   $('#new-session-error').hidden = true;
   $('#new-session-dialog').showModal();
   $('#session-name').focus();

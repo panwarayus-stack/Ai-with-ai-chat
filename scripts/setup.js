@@ -72,5 +72,6 @@ if (generatedPassword) {
 }
 console.log('\nNext: npm start for local development, or push this repository to a Hugging Face Gradio/ZeroGPU Space.');
 console.log('For Hugging Face, set WEB_PASSWORD as a Space secret; do not commit .env.');
-console.log('Provider setup: open a session and use OpenCode /connect, or allowlist provider secrets with TERMINAL_ENV_ALLOWLIST.');
+console.log('Provider setup: provider secrets such as ANTHROPIC_API_KEY, OPENAI_API_KEY, or OPENROUTER_API_KEY are forwarded automatically; you can also use OpenCode /connect.');
+console.log('Without a provider key OpenCode uses its shared Zen free tier, which is capped per network and often already spent on cloud hosts.');
 console.log('Skills: unchanged (no skills were requested).');
