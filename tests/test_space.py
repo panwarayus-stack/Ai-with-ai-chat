@@ -47,6 +47,17 @@ class SpaceWrapperTests(unittest.TestCase):
             app.start_node()
         node_tools.assert_not_called()
 
+    def test_child_environment_allows_more_than_two_sessions(self):
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("MAX_SESSIONS", None)
+            env = app.child_environment(Path("/tmp/workspace"), Path("/tmp/data"), 43210)
+        self.assertEqual(env["MAX_SESSIONS"], "8")
+
+    def test_provider_credential_names_are_forwarded_to_the_cli(self):
+        self.assertIn("ANTHROPIC_API_KEY", app.PROVIDER_ENV_NAMES)
+        self.assertIn("OPENROUTER_API_KEY", app.PROVIDER_ENV_NAMES)
+        self.assertNotIn("WEB_PASSWORD", app.PROVIDER_ENV_NAMES)
+
     def test_stop_node_clears_internal_port(self):
         process = mock.Mock()
         process.poll.return_value = None

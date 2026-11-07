@@ -32,6 +32,26 @@ from websockets.asyncio.client import connect as ws_connect
 
 ROOT = Path(__file__).resolve().parent
 
+# Mirrors PROVIDER_ENV_NAMES in config.js. Space secrets with these names are the
+# supported way to give the OpenCode CLI a real model provider; without one it
+# falls back to the shared Zen free tier, which is capped per network address and
+# normally reports "usage limit reached" straight away on a cloud host.
+PROVIDER_ENV_NAMES = (
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GEMINI_API_KEY",
+    "GOOGLE_GENERATIVE_AI_API_KEY",
+    "GROQ_API_KEY",
+    "MISTRAL_API_KEY",
+    "DEEPSEEK_API_KEY",
+    "XAI_API_KEY",
+    "CEREBRAS_API_KEY",
+    "TOGETHER_API_KEY",
+    "FIREWORKS_API_KEY",
+    "OPENCODE_API_KEY",
+)
+
 
 def public_port() -> int:
     """Return the port the Hugging Face Space router expects.
@@ -207,7 +227,10 @@ def child_environment(workspace: Path, data_dir: Path, port: int) -> dict[str, s
     env.setdefault("COOKIE_SAME_SITE", "none" if secure_cookies else "strict")
     # The Node backend is always behind this Space proxy, even locally.
     env["TRUST_PROXY"] = "1"
-    env.setdefault("MAX_SESSIONS", "2")
+    # Two concurrent sessions was far too tight: a reload leaves the old session
+    # behind, so the next "New session" hit the cap and reported a limit the
+    # visitor never actually reached. Keep a sane default and let deploys override.
+    env.setdefault("MAX_SESSIONS", "8")
     env.setdefault(
         "FRAME_ANCESTORS",
         "'self' https://huggingface.co https://*.huggingface.co https://*.hf.space",
@@ -233,6 +256,16 @@ def start_node() -> int:
     port = free_loopback_port()
     env = child_environment(workspace, data_dir, port)
 
+    configured_providers = [name for name in sorted(PROVIDER_ENV_NAMES) if os.environ.get(name)]
+    if configured_providers:
+        log.info("Model provider credentials detected: %s", ", ".join(configured_providers))
+    else:
+        log.warning(
+            "No model provider credentials found. OpenCode will use its shared, "
+            "per-network free tier, which normally reports a usage limit immediately."
+        )
+    if os.environ.get("OPENCODE_MODEL"):
+        log.info("Default OpenCode model: %s", os.environ["OPENCODE_MODEL"])
     log.info("Starting OpenCode Node backend on 127.0.0.1:%s", port)
     node_process = subprocess.Popen(node_cmd + ["server.js"], cwd=ROOT, env=env)
     atexit.register(stop_node)

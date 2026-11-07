@@ -52,16 +52,23 @@ supervisor/reverse proxy; the actual terminal is still the Node/Express app.
    | `WEB_USERNAME` | no | Login username, defaults to `owner` |
    | Provider credentials | yes, for model use | e.g. `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or use OpenCode `/connect` after login |
 
-   If you use provider environment variables, also add a **Variable** named
-   `TERMINAL_ENV_ALLOWLIST` containing the comma-separated names you want passed
-   into OpenCode, for example:
+   Provider secrets are forwarded to the OpenCode process automatically for the
+   built-in list (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
+   `GEMINI_API_KEY`, `GOOGLE_GENERATIVE_AI_API_KEY`, `GROQ_API_KEY`,
+   `MISTRAL_API_KEY`, `DEEPSEEK_API_KEY`, `XAI_API_KEY`, `CEREBRAS_API_KEY`,
+   `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `OPENCODE_API_KEY`). For any other
+   variable add a **Variable** named `PROVIDER_ENV_ALLOWLIST` with extra names:
 
    ```text
-   ANTHROPIC_API_KEY,OPENAI_API_KEY,GEMINI_API_KEY
+   PROVIDER_ENV_ALLOWLIST=HF_TOKEN,MY_PROVIDER_API_KEY
    ```
 
-   Secrets are not exposed to the browser. They are only passed to the OpenCode
-   child process when explicitly allowlisted.
+   Optionally set `OPENCODE_MODEL` (for example `anthropic/claude-sonnet-4-5`) so
+   every fresh container starts on that model instead of a free default.
+
+   Credentials never reach the browser: they are only placed in the environment of
+   the server-side OpenCode process (and therefore its own shell tools). Site
+   secrets such as `WEB_PASSWORD`, cookies, and `DATA_DIR` are always stripped.
 4. Wait for the Space to build and start. On first boot `app.py` installs the Node
    dependencies from `package-lock.json`, starts the Node backend on an internal
    port, and proxies HTTP/WebSocket traffic from the public Space port `7860`.
@@ -78,6 +85,9 @@ supervisor/reverse proxy; the actual terminal is still the Node/Express app.
   while the Space is running still preserves the session.
 - ZeroGPU GPU quota applies to `@spaces.GPU` calls. Normal OpenCode terminal use
   does not call the GPU probe, but your model provider may still charge you.
+- OpenCode Zen's free models are metered per account and per network address, so
+  they usually report a usage limit immediately from a shared Space IP. Configure a
+  provider secret instead of relying on the free tier.
 - If you need guaranteed 24/7 persistence, use a paid always-on host or attach
   durable storage and design backup/restore around it.
 
@@ -189,9 +199,25 @@ package.
 
 ### Terminal works but model calls fail
 
-OpenCode still needs valid provider credentials. Use `/connect` inside OpenCode or
-set provider secrets and `TERMINAL_ENV_ALLOWLIST`. ZeroGPU does not provide model
-API credits.
+OpenCode still needs valid provider credentials. Add a provider secret from the
+table above (no `TERMINAL_ENV_ALLOWLIST` entry needed), run `/connect` or `/models`
+inside OpenCode, and optionally pin `OPENCODE_MODEL`. ZeroGPU does not provide
+model API credits.
+
+### `Limit reached` messages
+
+Three unrelated limits exist. The Space log and the browser banner now say which
+one applies.
+
+| Message | Cause | Fix |
+|---|---|---|
+| `Free usage limit reached. Subscribe to OpenCode Go…` (inside the TUI) | OpenCode Zen's **free** tier. It is counted per account **and per network address**, so a shared cloud IP is usually already spent before your first prompt. | Add a real provider secret (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, …), set `OPENCODE_MODEL`, and restart the Space. Paid Zen models also work. |
+| `Session limit reached (8/8)` (toast / dialog) | `MAX_SESSIONS` concurrent web sessions. Sessions survive browser reloads, so stale ones count too. | Close a session with the **×** button, or raise `MAX_SESSIONS` (1–32). |
+| `You have exceeded your GPU quota` (Gradio page) | ZeroGPU GPU time, which only a `@spaces.GPU` call consumes. | Not used by the terminal. Restarting the Space or waiting for the rolling 24 h reset clears it. |
+
+The sidebar counter and the banner under the top bar report the live provider and
+session state, and `GET /api/state` (authenticated) returns `providers`, `model`,
+`limits`, and `notices`.
 
 ## Verification
 

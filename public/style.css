@@ -55,6 +55,16 @@ code, pre { font-family: var(--mono); }
 .status-dot.error { background: var(--red); }
 
 .app-shell { height: 100dvh; display: flex; flex-direction: column; overflow: hidden; }
+.notice-bar { display: flex; flex-direction: column; border-bottom: 1px solid var(--border); background: var(--panel-raised); }
+.notice-bar[hidden] { display: none; }
+.notice { display: flex; align-items: flex-start; gap: 12px; padding: 9px 18px; font-size: 12px; line-height: 1.55; }
+.notice + .notice { border-top: 1px solid var(--border-soft); }
+.notice > span { flex: 1 1 auto; }
+.notice-warn { background: #2a2318; color: #e7d5ae; }
+.notice-info { color: var(--muted); }
+.notice-dismiss { flex: 0 0 auto; padding: 0 2px; border: 0; background: none; color: inherit; font-size: 15px; line-height: 1.2; cursor: pointer; opacity: .65; }
+.notice-dismiss:hover, .notice-dismiss:focus-visible { opacity: 1; }
+
 .topbar { height: 56px; flex: 0 0 56px; display: flex; align-items: center; gap: 22px; padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--panel); }
 .connection { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .header-cwd { color: var(--faint); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }

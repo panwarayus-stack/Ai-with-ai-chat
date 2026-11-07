@@ -25,6 +25,15 @@ check('private data directory', () => {
 check('authentication', () => { if (config.password.length < 16) throw new Error('password too short'); return 'configured (value hidden)'; });
 check('public origin', () => config.publicUrl || 'derived from request; set PUBLIC_URL for production');
 check('HTTPS cookies', () => config.secure ? 'Secure enabled' : 'disabled — use HTTPS before public deployment');
-console.log('\nProvider credentials are managed by OpenCode. Run `opencode auth list` as the service user to inspect them.');
+check('session cap', () => `${config.maxSessions} concurrent web sessions`);
+check('model providers', () => {
+  const forwardable = config.providerEnvNames.filter(name => process.env[name]);
+  if (forwardable.length) return `${forwardable.join(', ')} (forwarded to OpenCode)`;
+  const auth = path.join(process.env.HOME || '', '.local', 'share', 'opencode', 'auth.json');
+  if (fs.existsSync(auth)) return 'none in the environment; OpenCode auth.json is present';
+  return 'NONE — OpenCode will use its shared Zen free tier and may report "usage limit reached" immediately';
+});
+check('default model', () => config.defaultModel || 'not pinned; choose one with /models in the terminal');
+console.log('\nProvider credentials are read by OpenCode from its own environment or `opencode auth login`.');
 console.log('Hugging Face: check the Space logs and Settings → Variables and secrets; local: npm start.');
 process.exitCode = failures ? 1 : 0;

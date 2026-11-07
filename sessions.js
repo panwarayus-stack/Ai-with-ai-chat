@@ -147,7 +147,10 @@ export class SessionManager extends EventEmitter {
 
   async create({ name, cwd = '.', cols = 120, rows = 36 } = {}) {
     if (this.closed) throw new Error('Session manager is closing');
-    if (this.sessions.size >= this.config.maxSessions) throw Object.assign(new Error(`Session limit reached (${this.config.maxSessions}). Close an old session first.`), { status: 409 });
+    if (this.sessions.size >= this.config.maxSessions) throw Object.assign(
+      new Error(`Session limit reached (${this.sessions.size}/${this.config.maxSessions}). Close a session with the × button, then create a new one. Raise MAX_SESSIONS to allow more.`),
+      { status: 409, code: 'SESSION_LIMIT', details: { maxSessions: this.config.maxSessions } },
+    );
     const directory = await resolveWorkspaceDirectory(this.config, cwd);
     const cleanName = typeof name === 'string' ? name.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 64) : '';
     const id = crypto.randomUUID();
